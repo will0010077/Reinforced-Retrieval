@@ -24,7 +24,7 @@ def train(model:gptmodel, retriever:Retriever, bar:tqdm, optim:torch.optim.AdamW
     '''
     bar: tqdm(DataLoader)
     '''
-
+    
     model.train()
     losses=3
     rewards=0.
