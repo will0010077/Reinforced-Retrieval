@@ -3,11 +3,11 @@ import torch
 
 
 class transition:
-    def __init__(self, inputs, outputs, retrieved, rewards):
-        self.inputs, self.outputs, self.retrieved, self.rewards = inputs, outputs, retrieved, rewards
+    def __init__(self, inputs, outputs, ret, rewards):
+        self.inputs, self.outputs, self.ret, self.rewards = inputs, outputs, ret, rewards
 
     def __str__(self) -> str:
-        return f'inputs:{self.inputs.shape}, outputs:{self.outputs.shape}, retrieved:{self.retrieved.shape}, rewards:{self.rewards.shape}'
+        return f'inputs:{self.inputs.shape}, outputs:{self.outputs.shape}, ret:{self.retrieved.shape}, rewards:{self.rewards.shape}'
 
 
 class doc_buffer:
@@ -30,7 +30,7 @@ class doc_buffer:
         
         return transition(self.stack('inputs'), 
                           self.stack('outputs'), 
-                          self.stack('retrieved'), 
+                          self.stack('ret'), 
                           self.stack('rewards'))
         
     

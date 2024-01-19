@@ -50,8 +50,8 @@ for epoch in range(max_epoch):
             doc_set.append(dt)
             ret = torch.cat([ret, zt[:,None,:]], dim = 1)
             outputs = torch.cat([outputs, qt[:,None,:]], dim = 1)
-            # K, V = concat K,V,q
             
+        doc_set = list(zip(doc_set))
         #forward and loss
         enc = encoder(doc_set)
         y, loss = LM(q,enc)
