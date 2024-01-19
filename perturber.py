@@ -25,27 +25,27 @@ class PositionalEncoding(nn.Module):
         Arguments:
             x: Tensor, shape ``[batch_size, seq_len, embedding_dim]``
         """
-        x = x + self.pe[:,:x.size(1)]
+        x = torch.cat([x, self.pe[:,:x.size(1)].tile(x.shape[0],1,1)], dim = -1)
         return self.dropout(x)
     
 class perturb_model(torch.nn.Module):
     
-    def __init__(self, in_dim=768, dim=768, num_heads=4, num_layers=2, dropout=0.1):
+    def __init__(self, in_dim=768, dim=768, num_heads=4, num_layers=2, dropout=0.1, pos_dim = 64):
         super().__init__()
         self.layer = torch.nn.TransformerEncoderLayer(d_model=dim, nhead=num_heads, dim_feedforward=dim, dropout=dropout,batch_first=True)
         self.model=torch.nn.TransformerEncoder(self.layer, num_layers)
         # self.model = torch.nn.ModuleList([torch.nn.MultiheadAttention(dim, num_heads, batch_first=True) for _ in range(num_layers)])
         self.lam = torch.nn.Parameter(torch.tensor(-10,dtype=torch.float))
-        self.pos_encoder = PositionalEncoding(in_dim, dropout=dropout, max_len=128, scale=0.01)
+        self.pos_encoder = PositionalEncoding(pos_dim, dropout=dropout, max_len=16, scale=0.01)
         self.dim=dim
         self.in_dim=in_dim
-        if self.dim!=self.in_dim:
-            self.scale1=torch.nn.Linear(in_dim, dim, bias=True)
-            self.scale2=torch.nn.Linear(dim, in_dim, bias=True)
-            self.scale1.weight.data*=1e-2
-            self.scale1.weight.data[torch.arange(in_dim),torch.arange(in_dim)]=torch.ones([in_dim])
-            self.scale2.weight.data*=1e-2
-            self.scale2.weight.data[torch.arange(in_dim),torch.arange(in_dim)]=torch.ones([in_dim])
+        
+        self.scale1=torch.nn.Linear(in_dim + pos_dim, dim, bias=True)
+        self.scale2=torch.nn.Linear(dim, in_dim, bias=True)
+        self.scale1.weight.data*=1e-2
+        self.scale1.weight.data[torch.arange(in_dim),torch.arange(in_dim)]=torch.ones([in_dim])
+        self.scale2.weight.data*=1e-2
+        self.scale2.weight.data[torch.arange(in_dim),torch.arange(in_dim)]=torch.ones([in_dim])
         
         # for n,p in self.model.named_parameters():
         #     if 'weight' in n and len(p.data.shape)==2:
@@ -53,16 +53,31 @@ class perturb_model(torch.nn.Module):
         #             p.data[i*dim:(i+1)*dim] = torch.eye(dim, dtype=p.data.dtype)
         #             p.data[i*dim:(i+1)*dim] += torch.randn([dim,dim], dtype=p.data.dtype)*1e-2
                     
-    def forward(self, x, mask):
-        # x = self.pos_encoder(x)
-        if self.dim!=self.in_dim:
-            x = self.scale1(x)
+    def forward(self, x:torch.Tensor, mask=None):
+        '''
+        x: (B,n,d)
+        mask: (n,n)
+        out: shape of x
+        '''
+        x = self.pos_encoder(x)
+        x = self.scale1(x)
         
+        if mask is None:
+            mask = torch.nn.Transformer.generate_square_subsequent_mask(x.shape[1], x.device)
         x=self.model.forward(x, mask)# + x #  (torch.nn.functional.sigmoid(self.lam))
             
-        if self.dim!=self.in_dim:
-            x = self.scale2(x)
+        x = self.scale2(x)
         return x
+    
+    @torch.no_grad()
+    def next(self, x:torch.Tensor, mask=None):
+        '''
+        x: (B,n,d)
+        output: (B,d)
+        '''
+        x = self.forward(x, mask)
+        
+        return x[:,-1,:]
     
     
 def prepare_parallel(query: Tensor, z: Tensor)->Tensor:
@@ -106,7 +121,7 @@ def parallel_mask(sz = 5, device = 'cpu'):
 
 if __name__=='__main__':
     device='cuda'
-    dim=32
+    dim=128
     model=perturb_model(in_dim=dim, dim = 1024, num_heads=8, num_layers=4, dropout=0.0)
     model.to(device)
     
@@ -116,7 +131,6 @@ if __name__=='__main__':
     Bs=256
     
     
-    mask = parallel_mask(L, device)
     #toy sample
     #random generate sample with shape [num_sample, Length, dim]
     train_x = torch.randn([num_sample, 1, dim],device=device)
@@ -136,11 +150,11 @@ if __name__=='__main__':
         lr_schedu.step()
         for i, x in enumerate(train_loader):
             lr_schedu.step()
-            y = x + torch.randn([x.shape[0], L, dim], device=device)*0.1 
-            x_ = prepare_parallel(x, y)
-            out = model.forward(x_, mask)
+            y = x + torch.randn([x.shape[0], L, dim], device=device)*0.1
+            x_ = torch.cat([x,y],dim = 1)
+            out = model.forward(x_)
             #MSE with target shift
-            loss:Tensor = (out[:,:L,:] - x).square().mean()
+            loss:Tensor = (out[:,:L,:] - y).square().mean()
             
             optimizer.zero_grad()
             loss.backward()
@@ -162,9 +176,7 @@ if __name__=='__main__':
         for i, x in enumerate(train_loader):
             lr_schedu.step()
             y = x[:,1:]
-            x = x[:,:1]
-            x_ = prepare_parallel(x, y)
-            out = model.forward(x_, mask)
+            out = model.forward(x,)
             #MSE with target shift
             loss:Tensor = (out[:,:L,:] - y).square().mean()
             

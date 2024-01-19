@@ -1,5 +1,7 @@
 import torch
 from tqdm import tqdm
+from replay_buffer import *
+
 '''
 
 Given document D, dataset (q_i,y_i)
@@ -38,18 +40,18 @@ num_retrieve=5
 train_bar=tqdm()
 for epoch in range(max_epoch):
     for q,y in train_bar:
-        zq = retriever.emb(q)
-        K=q, V=q
-        doc_set = []
+        ret = retriever.emb(q)
+        outputs = ret
+        doc_set=[]
         for k in num_retrieve:
             
-            qt = perturb(q, K, V)
-            
-            # zt, dt = retrieve(qt)
-            doc_set.append()
+            qt = perturb.next(ret)
+            zt, dt = retrieve(qt)
+            doc_set.append(dt)
+            ret = torch.cat([ret, zt[:,None,:]], dim = 1)
+            outputs = torch.cat([outputs, qt[:,None,:]], dim = 1)
             # K, V = concat K,V,q
-        
-        
+            
         #forward and loss
         enc = encoder(doc_set)
         y, loss = LM(q,enc)
@@ -63,7 +65,8 @@ for epoch in range(max_epoch):
         
         
         # replay buffer
-        replay.append(transition(q, doc_set, prob, reward))
+        for i in range(len(q)):
+            replay.append(transition(ret[i,0], outputs[i,1:], ret[i,1:], reward[i]))
         
         if RL_update:
             policy.update()
