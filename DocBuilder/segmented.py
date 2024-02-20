@@ -4,7 +4,7 @@ import dataset
 import h5py
 import torch
 
-from contriver import Contriever, DOC_Retriever
+from Retriever import Contriever, DOC_Retriever
 
 from torch.utils.data import DataLoader
 from tqdm import tqdm

@@ -7,8 +7,12 @@ name = "pypi"
 numpy = "*"
 torch = "*"
 tqdm = "*"
+transformers = "*"
+pipfile = "*"
+numba = "*"
+torch-kmeans = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.8"
+python_version = "3.10"

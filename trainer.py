@@ -1,6 +1,6 @@
 from Knowledge_encoder import KnowEncoder
 from llama_reader import LLaMa_reader
-from contriver import DOC_Retriever
+from Retriever import DOC_Retriever
 from collate_func import collateLM
 import torch
 import dataset
