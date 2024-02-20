@@ -1,6 +1,6 @@
 import sys
 sys.path.append('../..')
-import dataset
+import DatasetLoader.dataset as dataset
 import h5py
 import torch
 

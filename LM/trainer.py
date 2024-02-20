@@ -1,9 +1,9 @@
 from Knowledge_encoder import KnowEncoder
 from llama_reader import LLaMa_reader
 from Retriever import DOC_Retriever
-from collate_func import collateLM
+from DatasetLoader.collate_func import collateLM
 import torch
-import dataset
+import DatasetLoader.dataset as dataset
 from tqdm import tqdm
 import torch.utils.checkpoint
 import random
