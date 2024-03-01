@@ -18,7 +18,7 @@ dim=768
 data=torch.cat([torch.randn([10**5,dim], device='cuda').cpu() for _ in range(10)])
 # test(data)
 '''-------------------------------------------'''
-cluster_ids_x, centers=cluster.train(data, epoch=0)
+cluster_ids_x, centers=cluster.train(data, epoch=10, bs = 10**5, tol=0.1, lr=0.2)
 cluster.build()
 # cluster.save(t=87)
 # cluster.load(t=87)

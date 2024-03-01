@@ -44,15 +44,11 @@ def check_Qmark(text:str):
     return text
 
 class cluster_builder:
-    def __init__(self, num_search=10, k = 3000, bs = 10**5, tol=1, lr=0.2):
+    def __init__(self, k = 3000):
         self.centers = None
         self.idx = None
         self.dist_fn = lambda a,b: -cos_sim(a,b)
-        self.num_search =  int(num_search)
-        self.bs = int(bs)
         self.k = int(k)
-        self.tol = tol
-        self.lr = lr
         # self.dist_fn = lambda a,b: MSE(a,b)
     def get_mu(self, x, r, mu, a):
         '''x: (n, c), r: (n), mu: (k, c), a: in [0,1]'''
@@ -71,7 +67,7 @@ class cluster_builder:
         '''random select k start point from data to avoid some cluster do not have any data.'''
         perm = torch.randperm(len(x), dtype=torch.int)
         return x[perm[:k]]
-    def train(self, data, epoch=10):
+    def train(self, data, epoch=10, bs = 10**5, tol=0.1, lr=0.2):
         print('cluster training...')
         # assert len(data)>=self.k
 
@@ -126,14 +122,6 @@ class cluster_builder:
         print('build idx done...')
         
         print('sorting...')
-        # def inplace_swap(arr, i, j):
-        #     """Function to swap elements in the array 'arr' at indices 'i' and 'j'."""
-        #     arr[i], arr[j] = arr[j].clone(), arr[i].clone()
-        # order = argsort_idx.argsort()
-        # for i in tqdm(range(len(order))):
-        #     while  i!= order[i]:
-        #         inplace_swap(self.data, i, order[i].item())
-        #         inplace_swap(order, i, order[i].item())
 
         '''this will cause OOM, need to be done in-place'''
         self.data[:] = self.data[argsort_idx]
@@ -146,7 +134,7 @@ class cluster_builder:
         del self.idx
 
         
-    def save(self,t):
+    def save(self,t=None):
         '''save clusted_data, center, idx'''
         print('cluster saving...')
         if t is None:
@@ -186,7 +174,7 @@ class cluster_builder:
         print('loading data done...')
         return True
     
-    def search(self, x, k):
+    def search(self, x, k, num_search=10):
         '''x:(B,c)
         out: (B,k), (B,k,d)
         '''
@@ -194,7 +182,7 @@ class cluster_builder:
         '''need a function that return true doc idx given clusted idx
         so I need a {idx: doc_idx}'''
         
-        idx = self.first(x, k)#(B,k,2)
+        idx = self.first(x, k, num_search)#(B,k,2)
         ret_idx=[]
         ret_emb=[]
         for top_k in idx:
@@ -211,13 +199,13 @@ class cluster_builder:
         ret_emb = torch.stack(ret_emb)
         return ret_idx, ret_emb
     
-    def first(self, x,k):
-        '''x:(B,d)
-        out:(B,k,2)'''
+    def first(self, x, k, num_search):
+        '''x: query (B,d)
+        out: outptu idxs (B,k,2) (cluster_id, top_id)'''
         if self.centers is None:
             raise RuntimeError('The cluster is not trained.')
         dist = self.dist_fn(x, self.centers)#(N,k)
-        _, c_idx= dist.topk(self.num_search, dim = 1, largest=False)#(N)
+        _, c_idx= dist.topk(num_search, dim = 1, largest=False)#(N)
         c_idx=c_idx.cpu()
         # print('first:',c_idx)
         
@@ -231,7 +219,7 @@ class cluster_builder:
                 v_dist.append(v_c_dist)
                 v_idx.append(torch.stack([c.tile(len(v_c_idx)), v_c_idx]).T)
             v_dist = torch.cat(v_dist)
-            v_idx = torch.cat(v_idx)#(num, k, 2)
+            v_idx = torch.cat(v_idx)#(num, k, 2) (cluster_id, top_id)
             # print('v_idx:',v_idx,v_idx.shape)
             # print('v_dist:',v_dist,v_dist.shape)
             _, v_k_idx = v_dist.topk(k, dim = 0, largest=False)#(k)
@@ -240,8 +228,9 @@ class cluster_builder:
         return idx
         
     def second(self,v,c,k):
-        '''v:(d), c:(n,d)
-        out:(k)'''
+        '''v: query with shape (d)
+        c: cluster vectors with shape(n,d)
+        out: output idx() with shape (k)'''
         dist = self.dist_fn(v[None,:], c)[0]#(n)
         d, idx = dist.topk(min(k,len(c)), dim = 0, largest=False)#(k)
         return d.cpu(), idx.cpu()
@@ -249,7 +238,7 @@ class cluster_builder:
     
         
 class DOC_Retriever(torch.nn.Module):
-    def __init__(self, use_cache=True,load_data_feature=True):
+    def __init__(self, use_cache=True,load_data_feature=True, num_search=10):
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained("facebook/contriever")
         self.model=Contriever()
@@ -257,6 +246,8 @@ class DOC_Retriever(torch.nn.Module):
         self.model.eval()
         self.model.to('cuda')
         self.bs=512
+        self.cluster = cluster_builder()
+        self.num_search=num_search
         if use_cache:
             self.retrieve_cache= {}
         if load_data_feature:
@@ -270,102 +261,73 @@ class DOC_Retriever(torch.nn.Module):
         '''
         return: tensor with shape:(N, 768)
         '''
-        feature_list=torch.empty(len(ids),model_config['embed_dim'],dtype=torch.float32)
+        feature_ts=torch.empty(len(ids),model_config['embed_dim'],dtype=torch.float32)
 
 
         dataloader = DataLoader(ids, batch_size=self.bs, shuffle=False, collate_fn=self.collate,num_workers=0)
         for i,idx in (bar:=tqdm(enumerate(dataloader),ncols=0,total=len(dataloader))):
             feature  = self.model(idx)#(bs, d)
-            feature_list[i*self.bs:i*self.bs+self.bs]=feature.to('cpu')
+            feature_ts[i*self.bs:i*self.bs+self.bs]=feature.to('cpu')
 
-        return  feature_list
-    def load_index(self):
-        '''
-        load trained index
-        '''
-        # with open('/home/devil/workspace/nlg_progress/backend/app/data/IndexIVFFlat.pkl', 'rb') as f:
-        #     self.index = pickle.load(f)
-        self.index =faiss.read_index(self.index, "/home/devil/workspace/nlg_progress/backend/app/data/accumulated_index.index")
+        return  feature_ts
 
-    #TODO
-    def train_add_index(self, vectors):
+    def train_add_index(self, vectors, epoch=10, bs = 10**5, tol=0.1, lr=0.2, t=None):
         '''
         vectors:(N,768)\\
         save trained index
         '''
-        quantizer=faiss.IndexFlatIP(model_config['embed_dim'])
-        self.index = faiss.IndexIVFFlat(quantizer,model_config['embed_dim'],int((10**7)**0.5), faiss.METRIC_INNER_PRODUCT)
         
-        assert not self.index.is_trained
-        random_sequence = torch.randperm(vectors.shape[0])
-        num_samples = config['data_config']['num_doc']
-        random_vecs = random_sequence[:num_samples]
-        print('training')
-        self.index.train(vectors[random_vecs].numpy())
-        print('finish training')
-        assert self.index.is_trained
-        Bs=10**4
-        for i in tqdm(range(0, len(vectors), Bs)):
-            self.index.add(vectors[:Bs].numpy())
-            vectors=vectors[Bs:]
-
-
-        faiss.write_index(self.index, "/home/devil/workspace/nlg_progress/backend/app/data/accumulated_index.index")
-
-        # f_index=open('/home/devil/workspace/nlg_progress/backend/app/data/IndexIVFFlat.pkl','wb')
-        # pickle.dump(self.index,f_index,protocol=4)
+        self.cluster.train(vectors, epoch, bs, tol, lr)
+        self.cluster.build()
+        self.cluster.save(t=t)
+        
         print('saved trained index')
-    #TODO
+        return True
+        
+    def load(self, t):
+        self.cluster.load(t=t)
+        return True
+        
+        
     def search(self, querys, k=1):
         '''
         querys: (B,768)\\
-        return: (B, k) index
+        return: (B,k), (B,k,d)
         '''
         
-        self.index.nprobe=10
-        D, I = self.index.search(querys, k)
-        return I
-    def build_index(self, ids, filename):
+        idx, emb = self.cluster.search(querys, k, num_search=self.num_search)
+        return idx, emb
+    
+    def compute_vectors(self, ids, filename):
+        '''
+        ids: document tokens (N,len)
+        filename: path
+        '''
         self.feature= self.get_feature(ids)
-        torch.save(self.feature,filename)
-        print('saved vecs_reduced.pt')
+        torch.save(self.feature, filename)
+        print(f'save vector:{filename}')
+        
     @torch.inference_mode()
-    def retrieve(self, querys:list[str], k=5, threshold=0.2):
+    def retrieve(self, querys:list[str], k=5, num_search=0.2):
         '''
         querys: list or str\\
-        return retrieved seg (B, k, 512) 
+        return retrieved seg (B, k, len), embbeding (B,k,d)
         '''
         if isinstance(querys, str):
             querys = [querys]
-            
-        if hasattr(self, 'retrieve_cache'):
-            #check all query in cache
-            if all([q in self.retrieve_cache for q in querys]):
-                #check value k greater than current k
-                if all([self.retrieve_cache[q].shape[0]>=k for q in querys]):
-                    return torch.stack([self.retrieve_cache[q][:k] for q in querys]) #return value in cache
-            
             
         with torch.no_grad():
             x=self.tokenizer(querys, return_tensors='pt', padding=True ,truncation=True).to(self.model.model.device)
             query_feature = self.model(x)
         if len(query_feature.shape)==1:
             query_feature=query_feature[None,:]
+        idx, emb = self.search(query_feature, k)
         #cosine similarity
-        query_feature=query_feature.to(self.feature.device)
-        dis = cos_sim(query_feature, self.feature)
-
-        #top-k vector and index
-        v, id_batch = torch.topk(dis, k, dim=1, largest=True)
-        # print(id_batch.shape)
-        id_batch=id_batch.to(self.data.device)
-        retrieved_segs = self.data[id_batch]#shape:(B,k,512)
+        idx=idx.to(self.data.device)
+        retrieved_segs = self.data[idx]#shape:(B,k,len)
         
-        #update retrieve cache
-        if hasattr(self, 'retrieve_cache'):
-            self.retrieve_cache.update(zip(querys, retrieved_segs)) #shape:(k,512)
             
-        return retrieved_segs
+        return retrieved_segs, emb
 
 
 class Contriever(torch.nn.Module):
