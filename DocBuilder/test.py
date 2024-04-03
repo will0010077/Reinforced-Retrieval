@@ -12,8 +12,8 @@ class test:
             _,x = x.split([10,x.shape[0]-10])
             print('\r',x.shape)
             time.sleep(0.1)
-            
-cluster = cluster_builder(num_search=4, k=int(1*10**3),bs=10**5, lr=0.1)
+
+cluster = cluster_builder(k=int(1*10**3))
 dim=768
 data=torch.cat([torch.randn([10**5,dim], device='cuda').cpu() for _ in range(10)])
 # test(data)
@@ -30,5 +30,4 @@ print(f'searching with batch size:{bs} and k:{k}...')
 for i in tqdm(range(10000)):
     idx, emb = cluster.search(torch.randn([bs,dim], device='cuda'), k)
     # print(idx)
-    
-    
+

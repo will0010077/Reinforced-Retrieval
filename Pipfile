@@ -11,6 +11,10 @@ transformers = "*"
 pipfile = "*"
 numba = "*"
 torch-kmeans = "*"
+stanza = "*"
+spacy = "*"
+nltk = "*"
+html5lib = "*"
 
 [dev-packages]
 
