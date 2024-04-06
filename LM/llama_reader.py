@@ -2,6 +2,7 @@
 from transformers import AutoTokenizer,TextStreamer,TextIteratorStreamer,AutoModelForCausalLM
 from auto_gptq import AutoGPTQForCausalLM
 import torch
+from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import yaml
@@ -81,7 +82,7 @@ class LLaMa_reader:
         self.system_prompt = ''
         self.external=None
 
-    def forward(self, ids, target=None, masks=None, encoder_output = None, encoder_masks=None):
+    def forward(self, ids, target=None, masks=None, encoder_output = None, encoder_masks=None)->tuple[Tensor, Tensor]:
         '''
         forward function for teacher forcing\\
         the shape of ids, target, masks is (B,n)\\
@@ -147,7 +148,7 @@ class LLaMa_reader:
 
             past_key_values = output.past_key_values
         else:
-            attention_mask = None
+            attention_mask = masks
             past_key_values = None
             position_ids=None
 

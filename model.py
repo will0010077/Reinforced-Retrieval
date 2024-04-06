@@ -1,7 +1,7 @@
 import torch
 from torch import nn,Tensor
-from torch.utils.data import dataloader
-from transformers import AutoTokenizer,TextStreamer,TextIteratorStreamer,AutoModelForCausalLM
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer,TextStreamer,TextIteratorStreamer,AutoModelForCausalLM,AutoModel
 from auto_gptq import AutoGPTQForCausalLM
 from tqdm import tqdm
 import yaml
@@ -150,7 +150,7 @@ class LLaMa_reader:
 
             past_key_values = output.past_key_values
         else:
-            attention_mask = None
+            attention_mask = masks
             past_key_values = None
             position_ids=None
 
@@ -244,81 +244,6 @@ def check_Qmark(text:str):
     return text
 
 
-class PositionalEncoding(nn.Module):
-
-    def __init__(self, d_model: int, dropout: float = 0., max_len: int = 5000, scale=0.1):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(1, max_len, d_model)
-        pe[0, :, 0::2] = torch.sin(position * div_term)
-        pe[0, :, 1::2] = torch.cos(position * div_term)
-        pe = pe*scale
-        self.register_buffer('pe', pe)
-        self.pe:Tensor
-
-    def forward(self, x: Tensor) -> Tensor:
-        """
-        Arguments:
-            x: Tensor, shape ``[batch_size, seq_len, embedding_dim]``
-        """
-        x = torch.cat([x, self.pe[:,:x.size(1)].tile(x.shape[0],1,1)], dim = -1)
-        return self.dropout(x)
-    
-class perturb_model(torch.nn.Module):
-    
-    def __init__(self, in_dim=768, dim=768, num_heads=4, num_layers=2, dropout=0.1, pos_dim = 64):
-        super().__init__()
-        self.layer = torch.nn.TransformerEncoderLayer(d_model=dim, nhead=num_heads, dim_feedforward=dim, dropout=dropout,batch_first=True)
-        self.model=torch.nn.TransformerEncoder(self.layer, num_layers)
-        # self.model = torch.nn.ModuleList([torch.nn.MultiheadAttention(dim, num_heads, batch_first=True) for _ in range(num_layers)])
-        self.lam = torch.nn.Parameter(torch.tensor(-10,dtype=torch.float))
-        self.pos_encoder = PositionalEncoding(pos_dim, dropout=dropout, max_len=16, scale=0.01)
-        self.dim=dim
-        self.in_dim=in_dim
-        
-        self.scale1=torch.nn.Linear(in_dim + pos_dim, dim, bias=True)
-        self.scale2=torch.nn.Linear(dim, in_dim, bias=True)
-        self.scale1.weight.data*=1e-2
-        self.scale1.weight.data[torch.arange(in_dim),torch.arange(in_dim)]=torch.ones([in_dim])
-        self.scale2.weight.data*=1e-2
-        self.scale2.weight.data[torch.arange(in_dim),torch.arange(in_dim)]=torch.ones([in_dim])
-        
-        # for n,p in self.model.named_parameters():
-        #     if 'weight' in n and len(p.data.shape)==2:
-        #         for i in range(p.data.shape[0]//dim):
-        #             p.data[i*dim:(i+1)*dim] = torch.eye(dim, dtype=p.data.dtype)
-        #             p.data[i*dim:(i+1)*dim] += torch.randn([dim,dim], dtype=p.data.dtype)*1e-2
-                    
-    def forward(self, x:torch.Tensor, mask=None):
-        '''
-        x: (B,n,d)
-        mask: (n,n)
-        out: shape of x
-        '''
-        x = self.pos_encoder(x)
-        x = self.scale1(x)
-        
-        if mask is None:
-            mask = torch.nn.Transformer.generate_square_subsequent_mask(x.shape[1], x.device)
-        x=self.model.forward(x, mask)# + x #  (torch.nn.functional.sigmoid(self.lam))
-            
-        x = self.scale2(x)
-        return x
-    
-    @torch.no_grad()
-    def next(self, x:torch.Tensor, mask=None):
-        '''
-        x: (B,n,d)
-        output: (B,d)
-        '''
-        x = self.forward(x, mask)
-        
-        return x[:,-1,:]
-    
-    
 def prepare_parallel(query: Tensor, z: Tensor)->Tensor:
     '''
     query: (B,1,d)

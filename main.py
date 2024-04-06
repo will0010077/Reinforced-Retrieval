@@ -2,7 +2,7 @@ import sys
 sys.path.append('../..')
 sys.path.append("app/lib/DocBuilder/")
 from DocBuilder.Retriever_k_means import cluster_builder, cos_sim, doc_retriever
-from LexMAE import lex_encoder,lex_decoder, lex_retriever, top_k_sparse
+from DocBuilder.LexMAE import lex_encoder,lex_decoder, lex_retriever, top_k_sparse
 import dataset
 import time,datetime
 import h5py

@@ -2,7 +2,9 @@ train_config:
   max_epoch : 6
   spilt : 0.95
   num_samples : null
-  lr : 2.e-5
+  enc_lr : 5.e-5
+  lm_lr : 1.e-5
+  agent_lr : 5.e-5
   betas: [0.9, 0.99]
   weight_decay : 0.01
   topk : 1

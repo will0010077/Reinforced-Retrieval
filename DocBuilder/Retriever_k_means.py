@@ -257,15 +257,18 @@ class doc_retriever(torch.nn.Module):
     @torch.inference_mode()
     def retrieve(self, querys:list[str], k=5, num_search=10) ->tuple[Tensor, Tensor] :
         '''
-        querys: list or str\\
+        querys: list or str or Tensor\\
         return retrieved seg (B, k, len), embbeding (B,k,d)
         '''
         if isinstance(querys, str):
             querys = [querys]
-
-        with torch.no_grad():
-            x=self.tokenizer(querys, return_tensors='pt', padding=True ,truncation=True).to(self.ref.device)
-            query_feature = self.model(x)
+            
+        if isinstance(querys, list):
+            query_feature = self.forward(querys)
+        elif isinstance(querys, Tensor):
+            query_feature = querys
+        else:
+            raise TypeError(querys)
         if len(query_feature.shape)==1:
             query_feature=query_feature[None,:]
         idx, emb = self.cluster.search(query_feature, k, num_search)
@@ -275,7 +278,11 @@ class doc_retriever(torch.nn.Module):
 
 
         return retrieved_segs, emb
-
+    
+    def forward(self, querys:list[str]):
+        x=self.tokenizer(querys, return_tensors='pt', padding=True ,truncation=True).to(self.ref.device)
+        return  self.model(x)
+        
 
 class Contriever(torch.nn.Module):
     def __init__(self):
