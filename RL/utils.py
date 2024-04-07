@@ -11,7 +11,7 @@ class transition:
         ret : (k,d)
         rewards : (k) or scalar
         '''
-        self.inputs, self.preds, self.ret, self.rewards = inputs, preds, ret, rewards
+        self.inputs, self.preds, self.ret, self.rewards = inputs.cpu(), preds.cpu(), ret.cpu(), rewards.cpu()
 
     def __str__(self) -> str:
         return f'inputs:{self.inputs.shape}, outputs:{self.preds.shape}, ret:{self.ret.shape}, rewards:{self.rewards.shape}'
@@ -83,7 +83,7 @@ class perturb_model(torch.nn.Module):
         self.scale1=torch.nn.Linear(in_dim + pos_dim, dim, bias=True)
         self.scale2=torch.nn.Linear(dim, in_dim, bias=True)
                     
-    def forward(self, x:torch.Tensor, mask=None):
+    def forward(self, x:torch.Tensor, mask=None)->Tensor:
         '''
         x: (B,n,d)
         mask: (n,n)
@@ -106,7 +106,7 @@ class Transformer_Agent(nn.Module):
         self.model = perturb_model(in_dim, dim)
         
     def forward(self, *args, **kwargs):
-        return self.model(*args, **kwargs)
+        return self.model.forward(*args, **kwargs)
     
     @torch.no_grad()
     def next(self, x:torch.Tensor, mask=None):

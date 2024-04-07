@@ -31,6 +31,7 @@ While not converge
 end while
 
 '''
+device='cuda'
 # init retriever
 
 cluster_config=config["cluster_config"]
@@ -43,17 +44,18 @@ lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever838.pt'
 
 data=torch.load('data/data_reduced_10000.pt') ## shape:(N,d)
 retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
-# retriever.to('cuda')
+retriever.to(device)
 
 # pre compute embbeding
 
 
 # init module
 # encoder:torch.Module
-LM =LLaMa_reader("MediaTek-Research/Breeze-7B-Instruct-v0_1")
+# LM =LLaMa_reader("MediaTek-Research/Breeze-7B-Instruct-v0_1")
 
 # init agent
 policy = Transformer_Agent(in_dim = 30522)
+policy.to(device)
 
 optim = torch.optim.AdamW(policy.parameters(), lr = config['train_config']['agent_lr'])
 replay = doc_buffer()
@@ -65,10 +67,10 @@ num_RL_update = 200
 data_path='data/cleandata.pt'
 dataset=NQADataset(data_path=data_path)
 loader = DataLoader(dataset, batch_size = 8, shuffle=True)
-train_bar=tqdm(dataset, ncols=0)
+train_bar=tqdm(loader, ncols=0)
 for epoch in range(max_epoch):
     for q, target in train_bar:
-        ret = retriever.forward(q)
+        ret = retriever.forward(q)[:,None,:]# (B,1,d)
         outputs = ret
         d_set=[]
         z_set=[]
@@ -77,29 +79,34 @@ for epoch in range(max_epoch):
         for k in range(num_retrieve):
             
             qt = policy.forward(ret)[:,-1] #(B,d)
-            dt, zt = retriever.retrieve(qt)
+            dt, zt = retriever.retrieve(qt, k=1)# [B, topk, 256] [B, topk, 30522]
             doc_set.append(dt)
-            ret = torch.cat([ret, zt[:,None,:]], dim = 1)
+            ret = torch.cat([ret, zt.to(ret.device)], dim = 1)
             outputs = torch.cat([outputs, qt[:,None,:]], dim = 1)
             
-        #forward and loss
+        doc_set = torch.cat(doc_set, dim=1)
+        # print(ret.shape, outputs.shape, doc_set.shape)::torch.Size([8, #ret+1, 30522]) torch.Size([8, #ret+1, 30522]) torch.Size([8, #ret, 256])
+        
+        
+        # !!!forward, loss and reward!!!
         with torch.no_grad():
             y, loss = LM.forward(q, target)
-        
-        reward = -loss# temperaly, (B)
-        
-        # grad update
+        reward=torch.ones([len(q)])
+        # reward = -loss# temperaly, (B)
         
         
-        # replay buffer
+        # update replay buffer
         for i in range(len(q)):
-            replay.append(transition(ret[i], outputs[i,1:], ret[i,:-1], reward[i]))
+            replay.append(transition(ret[i,:-1], outputs[i,1:], ret[i,1:], reward[i]))
         
-        if len(replay)%5000 ==0:
+        if len(replay)>500:
+            print(replay.sample())
             for _ in range(num_RL_update):
+                # !!!policy update!!!
                 optim.zero_grad()
                 loss.backward()
                 optim.step()
+                
             replay.clear()
         
     

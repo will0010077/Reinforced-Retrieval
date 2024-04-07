@@ -271,7 +271,7 @@ class doc_retriever(torch.nn.Module):
             raise TypeError(querys)
         if len(query_feature.shape)==1:
             query_feature=query_feature[None,:]
-        idx, emb = self.cluster.search(query_feature, k, num_search)
+        idx, emb = self.cluster.search(query_feature.to(self.cluster.centers.device), k, num_search)
         #cosine similarity
         idx=idx.to(self.data.device)
         retrieved_segs = self.data[idx]#shape:(B,k,len)
