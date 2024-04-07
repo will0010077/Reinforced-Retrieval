@@ -16,7 +16,7 @@ import pickle
 import random
 import yaml
 
-with open('app/lib/config.yaml', 'r') as yamlfile:
+with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 model_config = config['model_config']
 

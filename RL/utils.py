@@ -82,16 +82,6 @@ class perturb_model(torch.nn.Module):
         
         self.scale1=torch.nn.Linear(in_dim + pos_dim, dim, bias=True)
         self.scale2=torch.nn.Linear(dim, in_dim, bias=True)
-        self.scale1.weight.data*=1e-2
-        self.scale1.weight.data[torch.arange(in_dim),torch.arange(in_dim)]=torch.ones([in_dim])
-        self.scale2.weight.data*=1e-2
-        self.scale2.weight.data[torch.arange(in_dim),torch.arange(in_dim)]=torch.ones([in_dim])
-        
-        # for n,p in self.model.named_parameters():
-        #     if 'weight' in n and len(p.data.shape)==2:
-        #         for i in range(p.data.shape[0]//dim):
-        #             p.data[i*dim:(i+1)*dim] = torch.eye(dim, dtype=p.data.dtype)
-        #             p.data[i*dim:(i+1)*dim] += torch.randn([dim,dim], dtype=p.data.dtype)*1e-2
                     
     def forward(self, x:torch.Tensor, mask=None):
         '''
@@ -112,7 +102,7 @@ class perturb_model(torch.nn.Module):
     
 class Transformer_Agent(nn.Module):
     def __init__(self,in_dim, dim=768):
-        super.__init__()
+        super().__init__()
         self.model = perturb_model(in_dim, dim)
         
     def forward(self, *args, **kwargs):

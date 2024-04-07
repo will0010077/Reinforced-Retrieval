@@ -17,23 +17,31 @@ loader_config:
   num_workers : 1
   persistent_workers : True
 
+
 model_config:
   embed_dim: 768
 
+cluster_config:
+  k: 100
+  bs: 50000
+  lr: 0.1
+  tol: 0.01
+  num_search: 4
 
 data_config:
-  num_doc: 200000
-  num_samples: 200000
+  num_doc: 10000
+  num_samples: 10000
   windows: 256
   step: 192
 
 generate_config:
   no_repeat_ngram_size: 6
   do_sample: True
-  top_k: 50 
+  top_k: 50
   num_beams: 3
   bad_words_ids: null
-  
+
+
 
 
 seed: 87

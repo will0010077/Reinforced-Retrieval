@@ -14,7 +14,7 @@ import pickle
 import random
 import yaml
 
-with open('app/lib/config.yaml', 'r') as yamlfile:
+with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 model_config = config['model_config']
 
@@ -89,7 +89,7 @@ class cluster_builder:
         # assert len(data)>=self.k
 
         self.data = data
-        loader = DataLoader(self.data, batch_size=bs, shuffle=True, drop_last=True )
+        loader = DataLoader(self.data, batch_size=bs, shuffle=True )
 
         mu = self.init_mu(self.data, self.k).to(device)
         for _ in range(epoch):
@@ -158,7 +158,7 @@ class cluster_builder:
         print('cluster saving...')
         if name is None:
             name = datetime.datetime.now().strftime('%m_%d_%H_%M')
-        data_path = f'app/data/clusted_data_{name}.pt'
+        data_path = f'data/clusted_data_{name}.pt'
         torch.save({'center':self.centers, 'idx':self.clusted_idx, 'data':self.clusted_data}, data_path)
         print('save done!!')
         return name
@@ -167,7 +167,7 @@ class cluster_builder:
         '''load clusted_data'''
         print('cluster loading...')
         assert name is not None
-        data_path = f'app/data/clusted_data_{name}.pt'
+        data_path = f'data/clusted_data_{name}.pt'
         loaded_dict = torch.load(data_path, map_location='cpu')
         self.centers = loaded_dict['center']
         self.clusted_idx = loaded_dict['idx']

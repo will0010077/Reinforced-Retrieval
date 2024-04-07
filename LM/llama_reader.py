@@ -1,13 +1,13 @@
 
 from transformers import AutoTokenizer,TextStreamer,TextIteratorStreamer,AutoModelForCausalLM
-from auto_gptq import AutoGPTQForCausalLM
+# from auto_gptq import AutoGPTQForCausalLM
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import yaml
 
-with open('app/lib/config.yaml', 'r') as yamlfile:
+with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 
 

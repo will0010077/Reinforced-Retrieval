@@ -344,10 +344,10 @@ class cleanDataset(Dataset):
         return answers, long_answer, str(sample['document_text']), sample, sample['question_text']
 
 class DocumentDatasets():
-    def __init__(self) -> None:
+    def __init__(self, path='app/data/segmented_data_') -> None:
         self.file_index=6
 
-        self.file_list = [h5py.File(f"app/data/segmented_data_{i}.h5", 'r')[u'segments'] for i in range(self.file_index)]
+        self.file_list = [h5py.File(path+f"{i}.h5", 'r')[u'segments'] for i in range(self.file_index)]
         self.file_len = [f.shape[0] for f in self.file_list]
         self.offset = [0]
         for i in range(0, len(self.file_len)-1):

@@ -13,9 +13,8 @@ import random
 import re
 from transformers import AutoTokenizer, AutoModel
 import yaml,os
-from contriver import Contriever
-from LexMAE import lex_retriever
-with open('app/lib/config.yaml', 'r') as yamlfile:
+from DocBuilder.LexMAE import lex_retriever
+with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 
 

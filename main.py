@@ -18,7 +18,7 @@ import random
 import yaml,sys,os
 from fintune_contriver import NQADataset
 
-with open('app/lib/config.yaml', 'r') as yamlfile:
+with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 
 seed = config['seed']
@@ -188,7 +188,7 @@ if __name__ == '__main__':
 
     elif sys.argv[1]=="save_embed": # 12hr
         device='cuda'
-        data = dataset.DocumentDatasets()
+        data = dataset.DocumentDatasets(path = 'data/segmented_data_')
 
         num_samples = config['data_config']['num_doc']
         random_sequence = torch.randperm(len(data))
@@ -199,17 +199,17 @@ if __name__ == '__main__':
 
         lex_MAE_retriver=lex_retriever()
         lex_MAE_retriver.to(device)
-        load_path = 'app/save/LEX_MAE_retriever838.pt'
+        load_path = 'save/LEX_MAE_retriever838.pt'
         lex_MAE_retriver.model.load_state_dict(torch.load(load_path, map_location='cpu')['enc_model_state_dict'])
         print('load weight from',load_path)
         
         feature = lex_MAE_retriver.get_feature(data, 32)
         # feature = top_k_sparse(feature, 256)
-        torch.save(feature,f'app/data/vecs_reduced_{num_samples}.pt')
+        torch.save(feature, f'data/vecs_reduced_{num_samples}.pt')
 
         print('saved vecs_reduced.pt')
 
-        torch.save(data,f'app/data/data_reduced_{num_samples}.pt')
+        torch.save(data, f'data/data_reduced_{num_samples}.pt')
 
         print('saved data_reduced.pt')
         # vecs=torch.load('/home/devil/workspace/nlg_progress/backend/app/data/key_feature.pt')
@@ -219,27 +219,26 @@ if __name__ == '__main__':
         # print('saved')
     elif sys.argv[1]=="doc_build":
         cluster_config=config["cluster_config"]
-        File_name="200000"
-        data=torch.load('/home/devil/workspace/nlg_progress/backend/app/data/vecs_reduced_200000.pt') ## shape:(N,d)
+        data=torch.load('data/vecs_reduced_10000.pt') ## shape:(N,d)
 
         ## Trian
         print(data.shape)
         print(data[:5])
         cluster = cluster_builder(k=cluster_config["k"])
-        cluster_ids_x, centers=cluster.train(data, epoch=10, bs = cluster_config['bs'], tol=cluster_config['tol'], lr=cluster_config['lr'])
+        cluster_ids_x, centers=cluster.train(data, epoch=50, bs = cluster_config['bs'], tol=cluster_config['tol'], lr=cluster_config['lr'])
         cluster.build()
         name = cluster.save()
         cluster.load(name)
     elif sys.argv[1]=="test":
         cluster_config=config["cluster_config"]
         cluster = cluster_builder(k=cluster_config["k"])
-        cluster.load('03_31_20_22')
+        cluster.load('04_06_15_54')
 
         lex_MAE_retriver=lex_retriever()
         lex_MAE_retriver.to('cpu')
-        lex_MAE_retriver.model.load_state_dict(torch.load('app/save/LEX_MAE_retriever838.pt', map_location='cpu')['enc_model_state_dict'])
+        lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever838.pt', map_location='cpu')['enc_model_state_dict'])
 
-        data=torch.load('app/data/data_reduced_200000.pt') ## shape:(N,d)
+        data=torch.load('data/data_reduced_10000.pt') ## shape:(N,d)
         retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
         # retriever.to('cuda')
 
