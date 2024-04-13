@@ -3,8 +3,8 @@ sys.path.append('..')
 import torch
 from utils import custom_sparse_mmT, top_k_sparse
 import time
-a = top_k_sparse(torch.randn([30522]), 256)
-b = top_k_sparse(torch.randn([3000, 30522]), 256)
+a = top_k_sparse(torch.randn([30522]), 128)
+b = top_k_sparse(torch.randn([3000, 30522]), 128)
 
 # a = torch.Tensor([1,0,1,1,0,1,1,0]).to_sparse()
 

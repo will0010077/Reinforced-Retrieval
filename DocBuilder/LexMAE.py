@@ -1,8 +1,8 @@
 import sys
 sys.path.append("..")
 # Load model directly
-from DocBuilder.Retriever_k_means import cluster_builder, cos_sim
-from DocBuilder.utils import top_k_sparse, generate_mask, sparse_retrieve_rep, max_pooling
+from DocBuilder.Retriever_k_means import cluster_builder
+from DocBuilder.utils import top_k_sparse, generate_mask, sparse_retrieve_rep, max_pooling, cos_sim
 import torch
 from torch import Tensor
 
@@ -34,7 +34,7 @@ class lex_encoder(torch.nn.Module):
         '''
         mask = x.get('attention_mask',None)
         if mask is None:
-            mask=generate_mask(x, self.tokenizer.pad_token_id)
+            mask=generate_mask(x['input_ids'], self.tokenizer.pad_token_id)
         output=self.model(input_ids = x.get('input_ids',None), attention_mask = mask, output_hidden_states=True)
         logits, hidden_state = output.logits, output.hidden_states[-1]
         if output_low:
@@ -70,7 +70,7 @@ class lex_decoder(torch.nn.Module):
         '''
         mask = x.get('attention_mask',None)
         if mask is None:
-            mask=generate_mask(x, self.tokenizer.pad_token_id)
+            mask=generate_mask(x['input_ids'], self.tokenizer.pad_token_id)
         x = self.model.bert.embeddings(x.get('input_ids',None))
         if b is not None:
             x[:,0] = b # input bottleneck
@@ -91,14 +91,14 @@ class lex_retriever(torch.nn.Module):
     def forward(self, x:dict):
         mask = x.get('attention_mask',None)
         if mask is None:
-            mask=generate_mask(x, self.tokenizer.pad_token_id)
+            mask=generate_mask(x['input_ids'], self.tokenizer.pad_token_id)
             
         logits, hidden_state, b= self.model.forward(x, output_low=False)
 
         if hasattr(self, 'proj'):
             return sparse_retrieve_rep(self.proj(b))
-        return sparse_retrieve_rep(b)
         return sparse_retrieve_rep(max_pooling(logits, mask))
+        return sparse_retrieve_rep(b)
         return sparse_retrieve_rep(max_pooling(hidden_state, mask))
         return b
 
@@ -107,20 +107,23 @@ class lex_retriever(torch.nn.Module):
         '''
         return: tensor with shape:(N, 768)
         '''
-        feature_shape  = self.forward(self.collate([ids[0]])).shape[1]
-        feature_ts=torch.empty([len(ids), feature_shape],dtype=torch.float32)
+        temp = self.collate([ids[0]])
+        temp['input_ids'] = temp['input_ids'].to(self.model.model.device)
+        feature_shape  = self.forward(temp).shape[1]
+        feature_list=[None]*len(ids)
 
 
-        dataloader = DataLoader(ids, batch_size=bs, shuffle=False, collate_fn=self.collate,num_workers=0)
+        dataloader = DataLoader(ids, batch_size=bs, shuffle=False, collate_fn=self.collate, num_workers=8)
         for i,idx in (bar:=tqdm(enumerate(dataloader),ncols=0,total=len(dataloader))):
+            idx['input_ids'] = idx['input_ids'].to(self.model.model.device)
             feature  = self.forward(idx)#(bs, d)
 
-
-            feature_ts[i*bs: i*bs+bs ,:]=(feature)
-        return  feature_ts
+            sparse_feature = top_k_sparse(feature, 128)
+            feature_list[i*bs: i*bs+bs] = sparse_feature.cpu()
+        return  feature_list
     def collate(self, ids):
         ids = torch.stack(ids)
-        return {'input_ids':ids.to(self.model.model.device)}
+        return {'input_ids':ids}
 
 if __name__=='__main__':
     enc=lex_encoder()

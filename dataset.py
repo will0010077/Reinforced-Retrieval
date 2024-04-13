@@ -8,6 +8,7 @@ from transformers import AutoTokenizer, BertTokenizerFast
 import math
 from threading import Thread, Event,Lock
 import multiprocessing
+
 from queue import Queue
 import time,os,gc
 
@@ -222,12 +223,18 @@ class DocumentDatasets():
             self.offset.append(sum(self.file_len[0:i+1]))
         self.shape = torch.Size([self.__len__(), self.file_list[0].shape[1]])
 
-    def get_single(self, ids):
+    def get_single(self, idx):
 
         for i in reversed(range(len(self.offset))):
-            if ids >= self.offset[i]:
-                return torch.tensor(self.file_list[i][ids-self.offset[i]],dtype=torch.long)
-
+            if idx >= self.offset[i]:
+                return torch.tensor(self.file_list[i][idx-self.offset[i]],dtype=torch.long)
+                
+        raise IndexError(idx)
+    
+    def get_multi(self, ids, inverted_index, return_pt):
+        for idx in ids:
+            return_pt[inverted_index[idx]] = self.get_single(idx)
+            
     def __getitem__(self , ids):
         if hasattr(ids, '__iter__') or type(ids)==slice:
             if type(ids)==slice:
@@ -239,14 +246,18 @@ class DocumentDatasets():
 
                 ids = range(start, stop,step)
 
-            out=torch.empty([len(ids), self.shape[1]], dtype=torch.long)
-            for i, idx in enumerate(ids):
-                out[i]= self.get_single(idx)
+            inverted_index = {ele: i for i, ele in enumerate(ids)}
+            return_pt=torch.empty([len(ids), self.shape[1]], dtype=torch.long)
+            
+            num_thread = 8
+            step = len(ids)//num_thread+1
+            pool = [Thread(target=self.get_multi, args=(ids[i:i+step], inverted_index, return_pt)) for i in range(0, len(ids), step)]
+            [t.start() for t in pool]
+            [t.join() for t in pool]
 
-            return out
+            return return_pt
 
-        else:
-            return self.get_single(ids)
+        return self.get_single(ids)
 
     def __len__(self):
         #return DocumentLeng

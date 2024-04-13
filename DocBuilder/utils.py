@@ -16,12 +16,12 @@ def top_k_sparse(x:Tensor, k:int, vec_dim:int=-1):
     x=(x).to_sparse()
     return x
 
-def generate_mask(x, pad:int):
+def generate_mask(x:Tensor, pad:int):
     '''
     x:(B,N) with pad
     output: mask extend one token
     '''
-    mask = (x['input_ids']!=pad).long()
+    mask = (x!=pad).long()
     mask:Tensor
     front = torch.ones([len(mask),1], dtype=torch.long, device=mask.device)
     mask = torch.cat([front, mask], dim=-1)[:,:-1]
@@ -89,9 +89,9 @@ def custom_sparse_mmT(a: Tensor, b: Tensor) -> Tensor:
     
     # Create a dense matrix from mapped indices and values of b
     # b_dense = torch.sparse_coo_tensor(mapped_indices_b, filtered_values_b, (M, k)).to_dense()
-    b_dense = torch.empty([M,k], dtype=b.dtype)
+    b_dense = torch.zeros([M,k], dtype=b.dtype)
     b_dense[mapped_indices_b[0], mapped_indices_b[1]] = filtered_values_b
-    
+
     # Perform matrix multiplication (transposed)
     result_dense = a_dense@b_dense.T
     

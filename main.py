@@ -1,8 +1,9 @@
 import sys
 sys.path.append('../..')
 sys.path.append("app/lib/DocBuilder/")
-from DocBuilder.Retriever_k_means import cluster_builder, cos_sim, doc_retriever
-from DocBuilder.LexMAE import lex_encoder,lex_decoder, lex_retriever, top_k_sparse
+from DocBuilder.Retriever_k_means import cluster_builder, doc_retriever
+from DocBuilder.utils import cos_sim, top_k_sparse
+from DocBuilder.LexMAE import lex_encoder,lex_decoder, lex_retriever
 import dataset
 import time,datetime
 import h5py
@@ -191,10 +192,16 @@ if __name__ == '__main__':
         data = dataset.DocumentDatasets('data/segment/segmented_data_', 12)
 
         num_samples = config['data_config']['num_doc']
+        
+        # with reduced documents
         random_sequence = torch.randperm(len(data))
         random_nnn = random_sequence[:num_samples]
         random_nnn=sorted(random_nnn)
+        print('Loading...')
         data=data[random_nnn]
+        print(data[::1000])
+        
+        
         print(data.shape)
 
         lex_MAE_retriver=lex_retriever()
@@ -203,25 +210,20 @@ if __name__ == '__main__':
         lex_MAE_retriver.model.load_state_dict(torch.load(load_path, map_location='cpu')['enc_model_state_dict'])
         print('load weight from',load_path)
         
-        feature = lex_MAE_retriver.get_feature(data, 32)
-        # feature = top_k_sparse(feature, 256)
+        feature = lex_MAE_retriver.get_feature(data, 256)
         torch.save(feature, f'data/vecs_reduced_{num_samples}.pt')
-
         print('saved vecs_reduced.pt')
 
         torch.save(data, f'data/data_reduced_{num_samples}.pt')
-
         print('saved data_reduced.pt')
-        # vecs=torch.load('/home/devil/workspace/nlg_progress/backend/app/data/key_feature.pt')
-        # print(vecs.shape)
-        # vecs=vecs[random_nnn]
-        # torch.save(vecs,'/home/devil/workspace/nlg_progress/backend/app/data/vecs_reduced.pt')
-        # print('saved')
+        
+        print(torch.load(f'data/vecs_reduced_{num_samples}.pt'))
+        print(torch.load(f'data/data_reduced_{num_samples}.pt'))
     elif sys.argv[1]=="doc_build":
         cluster_config=config["cluster_config"]
         data=torch.load('data/vecs_reduced_10000.pt') ## shape:(N,d)
 
-        ## Trian
+        ## Train
         print(data.shape)
         print(data[:5])
         cluster = cluster_builder(k=cluster_config["k"])
