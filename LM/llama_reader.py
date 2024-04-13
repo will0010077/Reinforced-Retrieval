@@ -82,7 +82,7 @@ class LLaMa_reader:
         self.system_prompt = ''
         self.external=None
 
-    def forward(self, ids, target=None, masks=None, encoder_output = None, encoder_masks=None)->tuple[Tensor, Tensor]:
+    def forward(self, *args, encoder_output = None, encoder_masks=None, **kwargs)->tuple[Tensor, Tensor]:
         '''
         forward function for teacher forcing\\
         the shape of ids, target, masks is (B,n)\\
@@ -92,20 +92,36 @@ class LLaMa_reader:
 
         #concat document mask
         if encoder_masks is not None:
-            if masks is None:
-                masks = torch.ones_like(ids, dtype = torch.long, device=encoder_masks.device)
-            attention_mask = torch.cat([encoder_masks, masks.to(encoder_masks.device)],dim=-1)
+            if kwargs.get('attention_mask', None) is None:
+                masks = torch.ones_like(kwargs['input_ids'], dtype = torch.long, device=encoder_masks.device)
+            kwargs['attention_mask'] = torch.cat([encoder_masks, masks.to(encoder_masks.device)],dim=-1)
+
+        if kwargs.get('labels', None) is not None:
+            labels = kwargs['labels']
+            kwargs['labels'] = None
         else:
-            attention_mask = None
-        position_ids = torch.arange(ids.shape[1]).tile([ids.shape[0],1])
-        output = self.model(input_ids=ids,
+            labels=None
+            
+        position_ids = torch.arange(kwargs['input_ids'].shape[1]).tile([kwargs['input_ids'].shape[0],1])
+        output = self.model(**kwargs,
                             position_ids = position_ids,
-                            attention_mask=attention_mask,
-                            labels=target,
                             past_key_values=encoder_output,
                             use_cache=True)
-
-        return output.logits, output.loss
+        lm_logits:Tensor = output.logits
+        labels:Tensor
+        
+        if labels is not None:
+            stream=torch.cuda.current_stream()
+            labels = labels
+            # Shift so that tokens < n predict n
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = torch.nn.CrossEntropyLoss()
+            stream.synchronize()
+            loss = torch.stack([loss_fct(shift_logits[i], shift_labels[i]) for i in range(len(labels))])
+        
+        return lm_logits, loss
 
     @torch.inference_mode()
     def generate(self, message, encoder_output = None, encoder_masks=None, max_new_tokens = 1024, test=False, streamer=True):

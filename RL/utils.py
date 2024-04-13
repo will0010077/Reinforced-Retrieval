@@ -1,43 +1,67 @@
 # import numpy as np
+import sys
+sys.path.append('..')
 import torch
 from torch import Tensor, nn
 import math
-
-class transition:
-    def __init__(self, inputs:Tensor, preds:Tensor, ret:Tensor, rewards:Tensor):
+from DocBuilder.Retriever_k_means import inner
+import random
+class transition(nn.Module):
+    def __init__(self, inputs:Tensor, preds:Tensor, ret:Tensor, neg:Tensor, rewards:Tensor):
         '''
         inputs : (k,d)
         pred : (k,d)
         ret : (k,d)
+        neg : (k,neg,d)
         rewards : (k) or scalar
         '''
-        self.inputs, self.preds, self.ret, self.rewards = inputs.cpu(), preds.cpu(), ret.cpu(), rewards.cpu()
-
+        super().__init__()
+        self.register_buffer('inputs', inputs.detach().clone())
+        self.register_buffer('preds', preds.detach().clone())
+        self.register_buffer('ret', ret.detach().clone())
+        self.register_buffer('neg', neg.detach().clone())
+        self.register_buffer('rewards', rewards.detach().clone())
+        self.inputs:Tensor
+        self.preds:Tensor
+        self.ret:Tensor
+        self.neg:Tensor
+        self.rewards:Tensor
+        
+        
     def __str__(self) -> str:
-        return f'inputs:{self.inputs.shape}, outputs:{self.preds.shape}, ret:{self.ret.shape}, rewards:{self.rewards.shape}'
+        return f'inputs:{self.inputs.shape}, outputs:{self.preds.shape}, ret:{self.ret.shape}, neg:{self.neg.shape}, rewards:{self.rewards.shape}'
 
 
 class doc_buffer:
-    def __init__(self,):
+    def __init__(self, max_len=2**14):
         self.clear()
+        self.max_len=max_len
     
     def append(self, t):
         '''
         adding a transition to buffer
         '''
         self.buffer.append(t)
-        pass
+        if len(self)>self.max_len:
+            self.buffer.pop(0)
     
-    def stack(self, i, s:slice = None):
-        
-        return torch.stack([getattr(x, i) for x in self.buffer])
+    def stack(self, name, s:Tensor = None):
+        if s is not None:
+            return torch.stack([getattr(self.buffer[i], name) for i in s])
+        return torch.stack([getattr(x, name) for x in self.buffer])
     
-    def sample(self,):
+    def sample(self, bs, shuffle = False):
+        if shuffle:
+            index = torch.randperm(len(self))
+        else:
+            index = torch.arange(len(self))
         
-        return transition(self.stack('inputs'), 
-                          self.stack('preds'), 
-                          self.stack('ret'), 
-                          self.stack('rewards'))
+        for i in range(0, len(self), bs):
+            yield transition(self.stack('inputs', index[i:i+bs]), 
+                          self.stack('preds', index[i:i+bs]), 
+                          self.stack('ret', index[i:i+bs]),
+                          self.stack('neg', index[i:i+bs]),
+                          self.stack('rewards', index[i:i+bs]))
         
     def __len__(self,):
         return len(self.buffer)
@@ -68,7 +92,7 @@ class PositionalEncoding(nn.Module):
         x = torch.cat([x, self.pe[:,:x.size(1)].tile(x.shape[0],1,1)], dim = -1)
         return self.dropout(x)
     
-class perturb_model(torch.nn.Module):
+class perturb_model(nn.Module):
     
     def __init__(self, in_dim=768, dim=768, num_heads=4, num_layers=2, dropout=0.1, pos_dim = 64):
         super().__init__()
@@ -104,30 +128,46 @@ class Transformer_Agent(nn.Module):
     def __init__(self,in_dim, dim=768):
         super().__init__()
         self.model = perturb_model(in_dim, dim)
-        
-    def forward(self, *args, **kwargs):
-        return self.model.forward(*args, **kwargs)
+        self.lam = nn.Parameter(torch.ones(1)*-10, True)
+    def forward(self, x):
+        y=self.model.forward(x)
+        return self.lam.exp()*torch.log(1+y.relu_())+x
     
     @torch.no_grad()
-    def next(self, x:torch.Tensor, mask=None):
+    def next(self, x:torch.Tensor):
         '''
         x: (B,n,d)
         output: (B,d)
         '''
-        x = self.model.forward(x, mask)
+        x = self.forward(x)
         
         return x[:,-1,:]
+    
+    def get_loss(self, t:transition)->Tensor:
+        '''
+        Reinforce algorithm
+        return : loss (B,k)
+        '''
+        t.neg#(([32, 5, 16, 30522]))
+        outputs = self.forward(t.inputs)#(32,5,30522)
+        neg = (outputs[:,:,None,:] * t.neg).sum(-1)*10
+        M = torch.max(neg, dim=-1, keepdim=True).values#(32,5,1)
+        log_pi = (outputs * t.ret).sum(-1)*10 - M[:,:,0] - (neg-M).exp().sum(-1).log()
         
+        loss = -t.rewards[:,None] * log_pi + 0.1*torch.abs(outputs).sum(-1)
+        # regularization to original input query
+        loss += 0.1*((outputs - t.inputs)**2).sum(-1)
+        return loss    
 
 if __name__=='__main__':
     
     B = doc_buffer()
     
     for i in range(10000):
-        B.append(transition(torch.rand([5,64]), torch.rand([5,64]), torch.rand([5,64]), torch.ones(1)))
+        B.append(transition(torch.rand([5,64]), torch.rand([5,64]), torch.rand([5,64]),torch.rand([5,64]), torch.ones(1)))
     B.clear()
     for i in range(10000):
-        B.append(transition(torch.rand([5,64]), torch.rand([5,64]), torch.rand([5,64]), torch.ones(1)))
+        B.append(transition(torch.rand([5,64]), torch.rand([5,64]), torch.rand([5,64]),torch.rand([5,64]), torch.ones(1)))
     
     print(B.sample())
     

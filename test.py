@@ -1,4 +1,10 @@
+
 import torch
+a = torch.zeros([10000,1000,1000])
+input('stage 1')
+b = a[1:,...].contiguous()
+input('stage 2')
+exit()
 import sys
 from time import time
 from transformers import AutoTokenizer

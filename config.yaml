@@ -29,10 +29,10 @@ cluster_config:
   num_search: 4
 
 data_config:
-  num_doc: 10000
+  num_doc: 1000000
   num_samples: 10000
-  windows: 256
-  step: 192
+  windows: 96
+  step: 64
 
 generate_config:
   no_repeat_ngram_size: 6

@@ -11,7 +11,7 @@ from torch.utils.data import random_split, Dataset, DataLoader
 import json
 import random
 import re
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel, BertTokenizerFast
 import yaml,os
 from DocBuilder.LexMAE import lex_retriever
 with open('config.yaml', 'r') as yamlfile:
@@ -20,8 +20,8 @@ with open('config.yaml', 'r') as yamlfile:
 
 # from contriver import Contriever
 seed = config['seed']
-torch.manual_seed(seed)
-random.seed(seed)
+# torch.manual_seed(seed)
+# random.seed(seed)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -92,7 +92,7 @@ def xt_xent(
 
     dis = u@v.T
     dis = dis.diag() - dis.mean(dim=1)
-    dis = dis.mean().item()
+    dis = dis.mean()
     return loss, dis
 
 class NQADataset(Dataset):
@@ -128,32 +128,29 @@ class NQADataset(Dataset):
         return q,la#str(sample['question_text']),long_answer#text_without_tags
 
 
-class collect_fn():
-    def __init__(self, tokenizer):
-        super().__init__()
-        self.tokenizer = tokenizer
-    def __call__(self,batch):
-        '''
-            input: question,answer
-            return:torch.tensor(token_id) batchxseq_len
-        '''
-        input_list_a=[]
-        input_list_b=[]
+tokenizer = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")
+def collect_fn(batch):
+    '''
+        input: question,answer
+        return:torch.tensor(token_id) batch, seq_len
+    '''
+    input_list_a=[]
+    input_list_b=[]
 
-        for Q,A in batch:
-            if len(A)>0:
-                input_list_a.append(Q)
-                input_list_b.append(A)
+    for Q,A in batch:
+        if len(A)>0:
+            input_list_a.append(Q)
+            input_list_b.append(A)
 
-        output_a=self.tokenizer (text=input_list_a,return_tensors="pt",padding=True,truncation=True,max_length=128)
-        output_b=self.tokenizer (text=input_list_b,return_tensors="pt",padding=True,truncation=True,max_length=512)
+    output_a = tokenizer (text=input_list_a,return_tensors="pt",padding=True,truncation=True,max_length=32)
+    output_b = tokenizer (text=input_list_b,return_tensors="pt",padding=True,truncation=True,max_length=128)
 
-        return output_a, output_b
+    return output_a, output_b
 
 
 def trainer(epoch,model, early_stop=None):
     model.train()
-    ma_loss=1
+    ma_loss=3.4
     ma_dis=0
     ma_acc=0.5
     F_lambda=0.01
@@ -171,7 +168,8 @@ def trainer(epoch,model, early_stop=None):
         q = model(q)
         a = model(a)
         loss, dis =xt_xent(q, a, temperature=0.01)
-        loss += F_lambda*(flop_loss(q)+flop_loss(a))#vicreg(q,a)
+        loss += F_lambda*(flop_loss.forward(q)+flop_loss.forward(a))#vicreg(q,a)
+        loss += -dis*0.1
         loss.backward()
         optimizer.step()
 
@@ -217,9 +215,10 @@ def validation(model):
     print('total acc:',sum(acc)/len(acc))
     return sum(acc)/len(acc)
 
+
 if __name__=='__main__':
 
-    data_path='app/data/cleandata.pt'
+    data_path='data/cleandata.pt'
     # print(torch.load(data_path))
     dataset=NQADataset(data_path=data_path)
     print(len(dataset))
@@ -227,23 +226,23 @@ if __name__=='__main__':
     val_size = len(dataset) - train_size
 
 
-    lex_MAE_retriver=lex_retriever()
+    lex_MAE_retriver=lex_retriever(10000)
     lex_MAE_retriver.to(device)
 
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-    train_dataloader = DataLoader(train_dataset, batch_size=16, shuffle=True,collate_fn=collect_fn(lex_MAE_retriver.tokenizer))
-    val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False,collate_fn=collect_fn(lex_MAE_retriver.tokenizer))
+    train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True,collate_fn=collect_fn, num_workers=4, persistent_workers=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False,collate_fn=collect_fn)
 
 
-    checkpoint_path = 'app/save/LEX_MAE_retriever.pt'
-    load_path = 'app/save/LEX_MAE_retriever_loss_5.7730.pt'
+    checkpoint_path = 'save/LEX_MAE_retriever.pt'
+    load_path = 'save/LEX_MAE_retriever_loss_6.1098.pt'
     if os.path.isfile(load_path):
         lex_MAE_retriver.model.load_state_dict(torch.load(load_path, map_location='cpu')['enc_model_state_dict'])
         print('load weight from',load_path)
     else:
         print('Train from scrach')
 
-    optimizer = torch.optim.AdamW(lex_MAE_retriver.parameters(), lr=2e-5, weight_decay=1e-2)
+    optimizer = torch.optim.AdamW(lex_MAE_retriver.parameters(), lr=1e-5, weight_decay=1e-2)
     num_epochs=40
     lr_scher=torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20, cooldown=20, min_lr=1e-5)
     bestacc=0.80

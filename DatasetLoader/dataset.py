@@ -1,97 +1,152 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
-import json
+import json,re
 from tqdm import tqdm
 import h5py
 import numpy as np
 from transformers import AutoTokenizer
 import math
-from threading import Thread, Lock, Event
+from threading import Thread, Event,Lock
+import multiprocessing
 from queue import Queue
-import time
+import time,os,gc
 tokenizer = AutoTokenizer.from_pretrained("facebook/contriever")
 
 def write_segment(f, s2c:Queue, qlock:Lock, flock:Lock, event:Event):
+    buffer_size = 16
     while True:
         qlock.acquire()
-        if s2c.qsize()>0:
+        if not s2c.empty():
             segment_data = []
-            for _ in range(min(512, s2c.qsize())):
+            for _ in range(min(buffer_size, s2c.qsize())):
                 segment_data.append(s2c.get())
+
             qlock.release()
             segment_data = torch.stack(segment_data)
+            while not flock.acquire(timeout=0.1):
+                time.sleep(0.1)
 
-            flock.acquire()
-            f['segments'].resize((f['segments'].shape[0] + segment_data.shape[0]), axis=0)
-            f['segments'][-segment_data.shape[0]:, :] = segment_data
-            flock.release()
+            try:
+                f['segments'].resize((f['segments'].shape[0] + segment_data.shape[0]), axis=0)
+                f['segments'][-segment_data.shape[0]:, :] = segment_data
+            finally:
+                flock.release()
+
+            del segment_data
+
         else:
             qlock.release()
             if event.is_set():
                 break
-            time.sleep(0.001)
 
-def segmentation(data, window_size, step, output_file='app/data/segmented_data.h5'):
-    '''load data, segmented to 288 token id, save to h5py'''
+def generate_segments(text, window_size, step)-> torch.Tensor:
 
-    # Token indices sequence length is longer than the specified maximum sequence length for this model (14441966 > 512).
-    # 將文本分割成token, use tokenizer!!
+    text=re.sub("(<[/a-z0-9A-Z]*>)",'',string=text.strip())
+    tokens = tokenizer(text, return_tensors='pt').input_ids[0]
+    tokens: torch.Tensor
+    segment_list=[]
+
+    for i in range(0, max(len(tokens)-window_size,1), step):
+        segment_data = tokens[max(0, min(i, len(tokens)-window_size)):i+window_size]
+        # print(segment_data.shape)
+        if len(segment_data) < window_size:
+            # print('\n\nsome thing wrong please check generate seg', len(tokens))
+            padding = torch.zeros(window_size - len(segment_data), dtype=torch.long)
+            segment_data = torch.cat((segment_data, padding))
+        segment_list.append(segment_data)
+    segment_list=torch.stack(segment_list)
+    return  segment_list
+
+def process_data(args):
+    text, url, window_size, step, output_lock, output_file = args
+    segment_data=generate_segments(text, window_size, step)
+    with output_lock:
+        try:
+            f=h5py.File(output_file, 'a')
+            if 'segments' not in f:
+                f.create_dataset('segments', data=segment_data, maxshape=(None, window_size), dtype='i')
+            else:
+                f['segments'].resize((f['segments'].shape[0] + segment_data.shape[0]), axis=0)
+                f['segments'][-segment_data.shape[0]:, :] = segment_data
+        finally:
+            f.close()
+
+def segmentation_para(shared_dict, file_lock, shared_int, data, window_size, step, output_file='app/data/segmented_data.h5'):
+    gc.collect()
+    docu_ids = shared_dict
     first=True
-    max_queue_size = 4096
-    num_thread = 4
-    seg_count=0
-    skip=0
-    docu_ids=set()
+    # output_lock = Lock()
+    manager=multiprocessing.Manager()
+    output_lock=manager.Lock()
 
-
-    output_lock = Lock()
-    qlock = Lock()
-    s2c = Queue()
-    terminal_signal = Event()
-    # 初始化h5py文件
-    with h5py.File(output_file, 'w') as f:
-        # 創建一個dataset用於保存分割後的片段
-        bar = tqdm(data, total=310000)
-        pool=[Thread(target = write_segment, args = (f, s2c, output_lock, qlock, terminal_signal)) for _ in range(num_thread)]
-        [t.start() for t in pool]
-        for text, url  in bar:
+    num_processes = 3
+    # num_processes=1
+    pool = multiprocessing.Pool(processes=num_processes)
+    # results=[]
+    bar = tqdm(data)
+    for text, url in bar:
+        with file_lock:
             if url in docu_ids:
-                skip+=1
+                shared_int.value += 1
                 continue
             else:
-                docu_ids.add(url)
-            tokens = tokenizer(text, return_tensors='pt').input_ids[0]
-            # print(tokens)#Tensor [3214,  2005, 25439, 87,..., 2759]
+                docu_ids.update({url: False})
+        if first:
+            first=False
+            try:
+                print(f"{os.getpid()} Create Dataset")
+                f=h5py.File(output_file, 'w')
+                segment_data=generate_segments(text, window_size, step)
+                f.create_dataset('segments', data=segment_data, maxshape=(None, window_size), dtype='i')
+            finally:
+                f.close()
+            continue
+        pool.apply(process_data, args=((text, url, window_size, step, output_lock, output_file),))
+        bar.set_description_str(f"Process ID:{os.getpid()} Skip: {shared_int.value} Dict length:{len(docu_ids)}")
 
-            # 計算窗格的數量
-            num_windows = int(math.ceil((len(tokens)-window_size+0) / (step)) + 1)
-            seg_count+=num_windows
-            bar.set_description_str(f'{seg_count:7.1e}/{seg_count*310000/(bar.last_print_n+1):7.1e}, skip:{skip}')
-            # print(f"Total tokens: {len(tokens)}")
-            # print(f"Num windows: {num_windows}")
+    # 等待所有任务完成
+    # for result in results:
+    #     result.get()
+    #     result.wait()
 
-            # 分割文本並保存到dataset
-            segment_list=[]
-            for i in range(num_windows):
-                start_idx = i * (step)
-                end_idx = start_idx + window_size
-                end_idx = min(end_idx, len(tokens))
-                segment_data = tokens[start_idx:end_idx]
-                if len(segment_data) < window_size :
-                    assert i == num_windows - 1
-                    eos_padding = torch.zeros(window_size - len(segment_data), dtype=torch.long)
-                    segment_data = torch.cat((segment_data, eos_padding))
+    pool.close()
+    pool.join()
 
-                if first:
-                    dset = f.create_dataset('segments', data= segment_data[None,:] ,maxshape=(None, window_size), dtype='i')
-                    first=False
+    gc.collect()
+
+
+def Write_segment_Buffer(output_file, s2c:Queue, qlock:Lock, flock:Lock, event:Event):
+    while True:
+        qlock.acquire()
+        if not s2c.empty():
+            segment_data = s2c.get()
+            qlock.release()
+            flock.acquire()
+            try:
+                f=h5py.File(output_file, 'a')
+                if 'segments' not in f:
+                    f.create_dataset('segments', data=segment_data, maxshape=(None, segment_data.shape[1]), dtype='i')
                 else:
+                    f['segments'].resize((f['segments'].shape[0] + segment_data.shape[0]), axis=0)
+                    f['segments'][-segment_data.shape[0]:, :] = segment_data
+            finally:
+                f.close()
+            flock.release()
+        else:
+            qlock.release()
+            if event.is_set() and s2c.empty():
+                break
+            time.sleep(0.001)
 
-                    while s2c.qsize() >= max_queue_size:
-                        time.sleep(0.001)
-                    s2c.put(segment_data)
-        terminal_signal.set()
-        [t.join() for t in pool]
+
+def flush_buffer_to_file(f, buffer, output_lock):
+    output_lock.acquire()
+    try:
+        for segment_data in buffer:
+            f['segments'].resize((f['segments'].shape[0] + segment_data.shape[0]), axis=0)
+            f['segments'][-segment_data.shape[0]:, :] = segment_data
+    finally:
+        output_lock.release()
 
 
 class NQADataset():
@@ -101,15 +156,88 @@ class NQADataset():
 
     def load_data(self):
         with open(self.data_path, 'r', encoding='utf-8') as f:
-            for idx, line in enumerate(f):
+            data=f.readlines()
+            res=[]
+            for idx, line in enumerate(data):
                 if idx == self.num_samples:
                     break  # Stop reading after reaching the desired number of samples
                 # Assuming each line is a separate JSON object
                 a_line = json.loads(line)
                 out = a_line['document_text'], a_line['document_url']
                 if type(out[0])==str and type(out[1])==str:
+                    res.append((out[0], out[1].strip()))
+                    # yield out[0], out[1].strip()\
+        return res
 
-                    yield out[0], out[1].strip()
+def segmentation(shared_dict,file_lock,shared_int,segment, window_size, step, output_file='app/data/segmented_data.h5'):
+    '''load data, segmented to 288 token id, save to h5py'''
+
+    # Token indices sequence length is longer than the specified maximum sequence length for this model (14441966 > 512).
+    # 將文本分割成token, use tokenizer!!
+    first=True
+    max_queue_size = 512
+    num_thread = 8
+    seg_count=0
+    docu_ids=shared_dict
+
+    output_lock = Lock()
+    qlock = Lock()
+    s2c = Queue()
+    terminal_signal = Event()
+    # 初始化h5py文件
+        # 創建一個dataset用於保存分割後的片段
+    bar = tqdm(segment)
+    pool=[Thread(target = Write_segment_Buffer, args = (output_file, s2c, output_lock, qlock, terminal_signal)) for _ in range(num_thread)]
+    [t.start() for t in pool]
+
+    for text, url  in bar:
+        with file_lock:
+            if url in docu_ids:
+                shared_int.value+=1
+
+                continue
+            else:
+                docu_ids.update({url:False})
+                # print(len(docu_ids))
+
+        # print(tokens)#Tensor [3214,  2005, 25439, 87,..., 2759]
+
+        # # 計算窗格的數量
+        # num_windows = int(math.ceil((len(tokens)-window_size+0) / (step)) + 1)
+        # seg_count+=num_windows
+        # # bar.set_description_str(f'{seg_count:7.1e}/{seg_count*len(bar)/(bar.last_print_n+1):7.1e}, skip:{skip}')
+        # # print(f"Total tokens: {len(tokens)}")
+        # # print(f"Num windows: {num_windows}")
+
+        # # 分割文本並保存到dataset
+        # segment_list=[]
+        # for i in range(num_windows):
+        #     start_idx = i * (step)
+        #     end_idx = start_idx + window_size
+        #     end_idx = min(end_idx, len(tokens))
+        #     segment_data = tokens[start_idx:end_idx]
+        #     if len(segment_data) < window_size :
+        #         assert i == num_windows - 1
+        #         eos_padding = torch.zeros(window_size - len(segment_data), dtype=torch.long)
+        #         segment_data = torch.cat((segment_data, eos_padding))
+
+        if first:
+            segment_data=generate_segments(text, window_size, step)
+            try:
+                f=h5py.File(output_file, 'w')
+                if 'segments' not in f:
+                    f.create_dataset('segments', data=segment_data, maxshape=(None, segment_data.shape[1]), dtype='i')
+            finally:
+                f.close()
+            first=False
+            continue
+
+        while s2c.qsize() >= max_queue_size:
+            time.sleep(0.001)
+        s2c.put(generate_segments(text, window_size, step))
+        bar.set_description_str(f"Process ID:{os.getpid()} Skip: {shared_int.value} Dict length:{len(docu_ids)}")
+    terminal_signal.set()
+    [t.join() for t in pool]
 
     # def __len__(self):
     #     return len(self.data)
@@ -175,9 +303,9 @@ class QAPairDataset(Dataset):
 class cleanDataset(Dataset):
     def __init__(self, data_path='/home/contriever/v1.0-simplified_simplified-nq-train.jsonl',num_samples=None):
         self.data_path = data_path
-    
+
         self.num_samples = num_samples
-        
+
         self.data = self.load_data()
 
     def load_data(self):
@@ -185,7 +313,7 @@ class cleanDataset(Dataset):
         with open(self.data_path, 'r', encoding='utf-8') as f:
             for idx, line in enumerate(f):
                 if idx == self.num_samples:
-                    break  
+                    break
 
                 data.append(json.loads(line))
         return data
@@ -199,14 +327,14 @@ class cleanDataset(Dataset):
         #dict_keys(['document_text', 'long_answer_candidates', 'question_text', 'annotations', 'document_url', 'example_id'])
         # print(sample['question_text'])
         a=sample['annotations'][0]['long_answer']#sample['long_answer_candidates'][random_number]
-        
+
         long_answer=' '.join(sample['document_text'].split()[a['start_token']:a['end_token']])
         short_annotations=sample['annotations'][0]['short_answers']
         if short_annotations==[]:
             return None,None,None,None,None
         if type(short_annotations)==dict:
             short_annotations=[short_annotations]
-        
+
         answers=[]
         for i in range(len(short_annotations)):
             answer=' '.join(sample['document_text'].split()[short_annotations[i]['start_token']:short_annotations[i]['end_token']])
@@ -214,6 +342,47 @@ class cleanDataset(Dataset):
         # print(answers)
         # print(len(sample['question_text']))
         return answers, long_answer, str(sample['document_text']), sample, sample['question_text']
+
+class DocumentDatasets():
+    def __init__(self) -> None:
+        self.file_index=6
+
+        self.file_list = [h5py.File(f"app/data/segmented_data_{i}.h5", 'r')[u'segments'] for i in range(self.file_index)]
+        self.file_len = [f.shape[0] for f in self.file_list]
+        self.offset = [0]
+        for i in range(0, len(self.file_len)-1):
+            self.offset.append(sum(self.file_len[0:i+1]))
+        self.shape = torch.Size([self.__len__(), self.file_list[0].shape[1]])
+
+    def get_single(self, ids):
+
+        for i in reversed(range(len(self.offset))):
+            if ids >= self.offset[i]:
+                return torch.tensor(self.file_list[i][ids-self.offset[i]],dtype=torch.long)
+
+    def __getitem__(self , ids):
+        if hasattr(ids, '__iter__') or type(ids)==slice:
+            if type(ids)==slice:
+                start, stop, step = ids.start, ids.stop, ids.step
+                if step is None:
+                    step=1
+                if start is None:
+                    start=0
+
+                ids = range(start, stop,step)
+
+            out=torch.empty([len(ids), self.shape[1]], dtype=torch.long)
+            for i, idx in enumerate(ids):
+                out[i]= self.get_single(idx)
+
+            return out
+
+        else:
+            return self.get_single(ids)
+
+    def __len__(self):
+        #return DocumentLeng
+        return sum(self.file_len)
 
 def cleandata():
     data_path='/home/devil/workspace/nlg_progress/backend/app/data/v1.0-simplified_simplified-nq-train.jsonl'
@@ -234,7 +403,7 @@ def cleandata():
             continue
         else:
             datasample.append(dict(short_answers=ans,long_answer=la,document=d,question=q))
-    
+
     print(sum(total_a_lenth)/len(total_a_lenth))
     print(max(total_a_lenth))
     print('total:',len(datasample))#98708

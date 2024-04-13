@@ -7,12 +7,13 @@ import dataset
 import time,datetime
 import h5py
 import torch
+from torch import Tensor
 from torch.nn import functional as F
+from torch.utils.data import DataLoader
 import multiprocessing
 from functools import partial
 # from contriver import  DOC_Retriever,Contriever
 
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 import random
 import yaml,sys,os
@@ -33,17 +34,17 @@ if __name__ == '__main__':
     if len(sys.argv) < 2:
         print(f"please give the parameter for action: (segment / save_embed / doc_build) ")
         exit()
-    elif sys.argv[1]=="segment": # 3hr
+    elif sys.argv[1]=="segment": # 1hr
 
         manager = multiprocessing.Manager()
         shared_dict = manager.dict()
         shared_int = multiprocessing.Value("i", 0)  # "i"表示整数类型
         lock=manager.Lock()
-        qadataset = dataset.NQADataset(num_samples=None)
+        qadataset = dataset.NQADataset(data_path='data/v1.0-simplified_simplified-nq-train.jsonl',num_samples=None)
         qadataset = list(qadataset.load_data())
         print("Dataset Loaded!!")
 
-        Cor_num=multiprocessing.cpu_count()//2
+        Cor_num=multiprocessing.cpu_count()
         datastep=len(qadataset)//Cor_num+1
 
         multi_processing = []
@@ -51,7 +52,7 @@ if __name__ == '__main__':
             segment = qadataset[i * datastep:(i + 1) * datastep]
             p = multiprocessing.Process(
                 target=partial(dataset.segmentation, shared_dict, lock, shared_int),
-                args=(segment, windows, step, f'app/data/segmented_data_{i}.h5')
+                args=(segment, windows, step, f'data/segment/segmented_data_{i}.h5')
             )
             multi_processing.append(p)
             p.start()
@@ -60,46 +61,10 @@ if __name__ == '__main__':
         for p in multi_processing:
             p.join()
 
-        # Ensure termination of processes
-        # for p in multi_processing:
-        #     if p.is_alive():
-        #         p.terminate()
-
-
-        ## 2024.03.19 Remove
-        # multi_processing=[]
-        # for i in range(Cor_num):
-        #     segment = qadataset[i * datastep:(i + 1) * datastep]
-        #     multi_processing.append(multiprocessing.Process(target=dataset.segmentation_para, args=(shared_set,lock,shared_int, segment,windows,step,f'app/data/segmented_data_{i}.h5')))
-        # [p.start() for p in multi_processing]
-        # [p.join() for p in multi_processing]
 
     elif sys.argv[1]=="Train_Retriever":
 
-        device='cuda'
-        enc=lex_encoder()
-        dec=lex_decoder()
-        cls = enc.tokenizer.cls_token_id
-        eos = enc.tokenizer.pad_token_id
-        enc.train()
-        dec.train()
-        enc.to(device)
-        dec.to(device)
-        data = dataset.DocumentDatasets()
-        print(data.shape)
-        # small_data=data[:1000].repeat([100,1])
-        dataloader=DataLoader(data, batch_size=24, shuffle=True, num_workers=4)
-        optimizer=torch.optim.AdamW(
-            params=list(enc.parameters())+list(dec.parameters()),
-            lr=1e-5,
-            betas=config['train_config']['betas'],
-            weight_decay=config['train_config']['weight_decay'])
-
-
-        # Define checkpoint path
-        checkpoint_path = 'app/save/LEX_MAE_retriever.pt'
-        load_path = 'app/save/LEX_MAE_retriever_loss_5.8157.pt'
-        def Masking(x,P,all_mask=None):
+        def Masking(x,P,all_mask:Tensor=None):
             x=x.clone()
             if all_mask is None:
                 all_mask = torch.rand(x.shape, device=x.device) < P
@@ -115,7 +80,30 @@ if __name__ == '__main__':
             x[rand_mask] = torch.randint(999, enc.tokenizer.vocab_size, size = x[rand_mask].shape, dtype=x.dtype,  device=x.device)
 
             return x, all_mask.float()
+        def collate(batch):
+            train_x = torch.stack(batch)
+            
+            train_x = torch.cat([torch.ones([len(train_x),1], dtype=torch.long)*cls, train_x, torch.ones([len(train_x),1], dtype=torch.long)*eos], dim=1)#(B,256)
 
+            targets = train_x
+            bar_x, bar_mask=Masking(train_x, 0.3)
+            tilde_x, tilde_mask=Masking(train_x, 0.3, bar_mask)
+            
+            return targets, bar_x, bar_mask, tilde_x, tilde_mask
+        device='cuda'
+        enc=lex_encoder()
+        dec=lex_decoder()
+        cls = enc.tokenizer.cls_token_id
+        eos = enc.tokenizer.pad_token_id
+        enc.train()
+        dec.train()
+        enc.to(device)
+        dec.to(device)
+        # Define checkpoint path
+        checkpoint_path = 'save/LEX_MAE_retriever.pt'
+        load_path = 'save/LEX_MAE_retriever_loss_5.7730.pt'
+
+            
         if os.path.isfile(load_path):
             checkpoint = torch.load(load_path,map_location='cpu')
             enc.load_state_dict(checkpoint["enc_model_state_dict"])
@@ -127,28 +115,41 @@ if __name__ == '__main__':
         else:
             print('from scratch')
             start_epoch = 0
-            best_loss = 7
+            best_loss = 13
+
+        optimizer=torch.optim.AdamW(
+            params=list(enc.parameters())+list(dec.parameters()),
+            lr=3e-4,
+            betas=config['train_config']['betas'],
+            weight_decay=config['train_config']['weight_decay'])
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+
+        data = dataset.DocumentDatasets('data/segment/segmented_data_', 12)
+        print(data.shape)
+        print(data[:4])
+        print(enc.tokenizer.batch_decode(data[:4]))
+        # small_data=data[:1000].repeat([100,1])
+        dataloader=DataLoader(data, batch_size=128, shuffle=True, num_workers=8, collate_fn=collate)
 
         # Define checkpoint frequency (e.g., save every 5 epochs)
         checkpoint_freq = 1
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
         s_time =time.time()
         snow = datetime.datetime.now().strftime("%m_%d_%H_%M").strip()
         ma_loss=10
        
         for epoch in range(0,config['train_config']['max_epoch']):
 
-            bar = tqdm(dataloader)
+            bar = tqdm(dataloader, ncols=0)
             count=0
-            for train_x in bar:
+            for targets, bar_x, bar_mask, tilde_x, tilde_mask in bar:
+                optimizer.zero_grad()
                 count+=1
-                train_x = torch.cat([torch.ones([len(train_x),1], dtype=torch.long)*cls, train_x, torch.ones([len(train_x),1], dtype=torch.long)*eos], dim=1)#(B,256)
-                train_x = train_x.to(device)
-                targets = train_x
-                bar_x, bar_mask=Masking(train_x, 0.3)
-                tilde_x, tilde_mask=Masking(train_x, 0.3, bar_mask)
+                
+                targets, bar_x, bar_mask, tilde_x, tilde_mask = map(lambda x:x.to(device), [targets, bar_x, bar_mask, tilde_x, tilde_mask])
+                
                 bar_x = {"input_ids": bar_x}
                 tilde_x= {"input_ids": tilde_x}
+                
                 enc_logits, a, b=enc.forward(bar_x)
                 dec_logits=dec.forward(tilde_x, b=b)
                 
@@ -159,14 +160,13 @@ if __name__ == '__main__':
                 dec_loss = (dec_loss*tilde_mask).sum()/(tilde_mask.sum()+1e-4)
                 loss = enc_loss+dec_loss
                 loss = loss.mean()
-                optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
                 enc_pred = enc_logits.max(dim=-1).indices
-                enc_acc=((enc_pred==train_x).float()*bar_mask).sum()/(bar_mask.sum())
+                enc_acc=((enc_pred==targets).float()*bar_mask).sum()/(bar_mask.sum())
                 dec_pred = dec_logits.max(dim=-1).indices
-                dec_acc=((dec_pred==train_x).float()*bar_mask).sum()/(bar_mask.sum())
+                dec_acc=((dec_pred==targets).float()*bar_mask).sum()/(bar_mask.sum())
 
                 bar.set_description_str(f"Loss: {ma_loss:.2f}/{enc_loss:.2f}/{dec_loss:.2f}, Acc:{enc_acc:.2f}/{dec_acc:.2f}  Best Loss: {best_loss:.2f}, Save time: {snow}")
                 if not torch.isnan(loss):
@@ -188,7 +188,7 @@ if __name__ == '__main__':
 
     elif sys.argv[1]=="save_embed": # 12hr
         device='cuda'
-        data = dataset.DocumentDatasets(path = 'data/segmented_data_')
+        data = dataset.DocumentDatasets('data/segment/segmented_data_', 12)
 
         num_samples = config['data_config']['num_doc']
         random_sequence = torch.randperm(len(data))

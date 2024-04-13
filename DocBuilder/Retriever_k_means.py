@@ -1,9 +1,10 @@
 import sys
-sys.path.append("../../")
+sys.path.append("..")
 
 # Load model directly
 import torch
 from torch import Tensor, nn
+from DocBuilder.utils import inner
 
 from transformers import AutoTokenizer, AutoModel
 import logging
@@ -23,44 +24,13 @@ model_config = config['model_config']
 # random.seed(seed)
 device='cuda' if torch.cuda.is_available() else 'cpu'
 # device='cpu'
-def cos_sim(a:Tensor, b:Tensor):
-    '''a:(N,d),b:(M,d)
-    out: (N,M)'''
-    return (a @ b.T)/(torch.norm(a,dim=1)[:,None]@torch.norm(b,dim=1)[None,:])
-
-def cos_similarity(a:Tensor, b:Tensor):
-    # 对 a 和 b 进行归一化
-    # a_normalized = torch.nn.functional.normalize(a, p=2, dim=1)
-    # b_normalized = torch.nn.functional.normalize(b, p=2, dim=1)
-
-    # 计算余弦相似度
-    similarity = a@b.T  # 点积（内积）
-
-    return similarity
-
-def MSE(a:torch.Tensor, b:torch.Tensor):
-    '''a:(N,d),b:(M,d)
-    out: (N,M)'''
-    return torch.mean((a[:,None,:] - b[None,:,:])**2, dim=2)
-
-
-def check_Qmark(text:str):
-    # Reduce sensitivity to question marks
-    text=text.replace('？','?')
-    while '??' in text:
-        text=text.replace('??','?')
-    if '?' not in text:
-        text+='?'
-    return text
 
 class cluster_builder:
     def __init__(self, k = 3000):
         self.centers = None
         self.idx = None
-        # self.dist_fn = lambda a,b: -cos_sim(a,b)
-        self.dist_fn = lambda a,b: -cos_similarity(a,b)
+
         self.k = int(k)
-        # self.dist_fn = lambda a,b: MSE(a,b)
     def get_mu(self, x:Tensor, r:Tensor, mu:Tensor, lr:float):
         '''x: (n, c), r: (n), mu: (k, c), a: in [0,1]'''
         u = [x[r==i].mean(dim=0) for i in range(self.k)]
@@ -73,7 +43,7 @@ class cluster_builder:
 
     def get_r(self, x, mu):
         '''x: (n, c), mu: (k, c), r: (n)'''
-        dis=self.dist_fn(x, mu)
+        dis=inner(x, mu)
         min_k=torch.argmin(dis, axis=1)
         min_k[-self.k:]=torch.arange(self.k, device=min_k.device)
         return min_k
@@ -209,8 +179,8 @@ class cluster_builder:
         out: outptu idxs (B,k,2) (cluster_id, top_id)'''
         if self.centers is None:
             raise RuntimeError('The cluster is not trained.')
-        dist = self.dist_fn(x, self.centers)#(N,k)
-        _, c_idx= dist.topk(num_search, dim = 1, largest=False)#(N)
+        dist = inner(x, self.centers)#(N,k)
+        _, c_idx= dist.topk(num_search, dim = 1)#(N)
         c_idx=c_idx.cpu()
         # print('first:',c_idx)
 
@@ -227,7 +197,7 @@ class cluster_builder:
             v_idx = torch.cat(v_idx)#(num, k, 2) (cluster_id, top_id)
             # print('v_idx:',v_idx,v_idx.shape)
             # print('v_dist:',v_dist,v_dist.shape)
-            _, v_k_idx = v_dist.topk(k, dim = 0, largest=False)#(k)
+            _, v_k_idx = v_dist.topk(k, dim = 0)#(k)
             idx.append(v_idx[v_k_idx])
         idx = torch.stack(idx)
         return idx
@@ -236,8 +206,8 @@ class cluster_builder:
         '''v: query with shape (d)
         c: cluster vectors with shape(n,d)
         out: output idx() with shape (k)'''
-        dist = self.dist_fn(v[None,:], c)[0]#(n)
-        d, idx = dist.topk(min(k,len(c)), dim = 0, largest=False)#(k)
+        dist = inner(v[None,:], c)[0]#(n)
+        d, idx = dist.topk(min(k,len(c)), dim = 0)#(k)
         return d.cpu(), idx.cpu()
 
 
@@ -283,29 +253,6 @@ class doc_retriever(torch.nn.Module):
         x=self.tokenizer(querys, return_tensors='pt', padding=True ,truncation=True).to(self.ref.device)
         return  self.model(x)
         
-
-class Contriever(torch.nn.Module):
-    def __init__(self):
-        super(Contriever, self).__init__()
-        self.model = AutoModel.from_pretrained("facebook/contriever")
-        self.tokenizer = AutoTokenizer.from_pretrained("facebook/contriever")
-
-    def forward(self, x:dict):
-        '''
-        x: dict[input_ids, attention_mask]
-        output: Tensor[B, d]
-        '''
-        mask = x.get('attention_mask',None)
-        if mask is None:
-            mask = (x['input_ids']!=self.tokenizer.pad_token_id).long()
-        y=self.model(input_ids = x.get('input_ids',None), attention_mask = mask)
-        y=self.mean_pooling( y[0], mask)
-        return y
-    def mean_pooling(self,token_embeddings, mask):
-        token_embeddings = token_embeddings.masked_fill(~mask[..., None].bool(), 0.)
-        sentence_embeddings = token_embeddings.sum(dim=1) / mask.sum(dim=1)[..., None]
-        return sentence_embeddings
-
 if __name__=='__main__':
     retriever=doc_retriever()
     ooo=retriever.retrieve(['where is taiwan?','DOTDOTDOT'])
