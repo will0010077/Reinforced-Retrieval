@@ -1,10 +1,12 @@
 
 import torch
-a = torch.zeros([10000,1000,1000])
-input('stage 1')
-b = a[1:,...].contiguous()
-input('stage 2')
-exit()
+a = torch.randperm(10)
+b = a.argsort()
+c = b.argsort()
+d= sorted(zip(a,c), key=lambda x:x[1])
+d = list(zip(*d))[0]
+print(a,b,c,d)
+exit(0)
 import sys
 from time import time
 from transformers import AutoTokenizer

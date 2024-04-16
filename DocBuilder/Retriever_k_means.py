@@ -4,7 +4,7 @@ sys.path.append("..")
 # Load model directly
 import torch
 from torch import Tensor, nn
-from DocBuilder.utils import inner
+from DocBuilder.utils import inner, collate_list_to_tensor, custom_sparse_mmT, top_k_sparse
 
 from transformers import AutoTokenizer, AutoModel
 import logging
@@ -26,18 +26,19 @@ device='cuda' if torch.cuda.is_available() else 'cpu'
 # device='cpu'
 
 class cluster_builder:
-    def __init__(self, k = 3000):
+    def __init__(self, k = 3000, sparse_dim=128):
         self.centers = None
         self.idx = None
-
+        self.dim = None
         self.k = int(k)
+        self.sparse_dim = sparse_dim
     def get_mu(self, x:Tensor, r:Tensor, mu:Tensor, lr:float):
         '''x: (n, c), r: (n), mu: (k, c), a: in [0,1]'''
         u = [x[r==i].mean(dim=0) for i in range(self.k)]
         u = torch.stack(u)
         u = u*lr + mu*(1-lr)
 
-        dis=(u-mu).square().sum(dim=1).mean().item()
+        dis=(u-mu).norm(dim=-1).mean()
 
         return u, dis
 
@@ -48,28 +49,33 @@ class cluster_builder:
         min_k[-self.k:]=torch.arange(self.k, device=min_k.device)
         return min_k
 
-    def init_mu(self, x:Tensor, k):
+    def select_init_mu(self, x, k):
         '''random select k start point from data to avoid some cluster do not have any data.'''
         perm = torch.randperm(len(x), dtype=torch.int)
         # return x[:k]
         return x[perm[:k]]
+    def rand_init_mu(self, x, k):
+        '''random start point '''
+        return torch.randn((k,len(x[0])))
 
     def train(self, data, epoch=10, bs = 10**5, tol=0.1, lr=0.2):
         print('cluster training...')
         # assert len(data)>=self.k
 
         self.data = data
-        loader = DataLoader(self.data, batch_size=bs, shuffle=True )
+        loader = DataLoader(self.data, batch_size=bs, shuffle=True, collate_fn=collate_list_to_tensor)
 
-        mu = self.init_mu(self.data, self.k).to(device)
+        mu = self.rand_init_mu(self.data, self.k).to(device)
         for _ in range(epoch):
             bar=  tqdm(loader, ncols = 80)
             for data in bar:
                 data = data.to(device)
                 data = torch.cat([data, mu],dim=0)
                 dis=float('inf')
-                while dis>tol:
-                    data[-self.k:, :]=mu
+                count=0
+                while dis>tol and count<100:
+                    count+=1
+                    # data[-self.k:, :]=mu
                     r = self.get_r(data, mu)
                     mu, dis = self.get_mu(data, r, mu, lr)
                     bar.set_description_str(f'dist:{dis:.4f}')
@@ -82,7 +88,7 @@ class cluster_builder:
     def get_idx(self, mu, bs):
         '''compute each data->cluster
         out: (N)'''
-        loader = DataLoader(self.data, batch_size=bs, shuffle=False)
+        loader = DataLoader(self.data, batch_size=bs, shuffle=False, collate_fn=collate_list_to_tensor)
         bar=  tqdm(loader, ncols = 80)
         idx = []
         for data in bar:
@@ -113,9 +119,16 @@ class cluster_builder:
         print('sorting...')
 
         '''this will cause OOM, need to be done in-place'''
-        self.data[:] = self.data[argsort_idx]
+        # self.data[:] = self.data[argsort_idx]
         '''--------------------------------'''
-        self.clusted_data = self.data.split(count)
+        '''new sort method'''
+        self.data = sorted(zip(self.data, argsort_idx.argsort()), key=lambda x:x[1])
+        self.data = list(zip(*self.data))[0]
+        '''-----------------------'''
+        # self.clusted_data = self.data.split(count)
+        '''new split method for list'''
+        self.clusted_data = [torch.stack(self.data[sum(count[:i]):sum(count[:i+1])]).coalesce() for i in range(len(count))]
+        print('coalesced:',self.clusted_data[0].is_coalesced())
         del self.data
         print('build cluster done...')
 
@@ -142,7 +155,8 @@ class cluster_builder:
         self.centers = loaded_dict['center']
         self.clusted_idx = loaded_dict['idx']
         self.clusted_data = loaded_dict['data']
-
+        print('coalesced:',self.clusted_data[0].is_coalesced())
+        self.dim = self.centers.shape[-1]
         if self.centers.shape[0]!=self.k:
             raise RuntimeError(f'The cluster with k={self.centers.shape[0]} and init k={self.k} are not the same!')
         # self.centers=self.centers.to(device)
@@ -165,7 +179,12 @@ class cluster_builder:
             b_emb=[]
             for f,s in top_k:
                 b_idx.append(self.clusted_idx[f][s])
-                b_emb.append(self.clusted_data[f][s])
+                # b_emb.append(self.clusted_data[f][s])# RuntimeError: Cannot set version_counter for inference tensor
+                mask = self.clusted_data[f].indices()[0]==s
+                indices = self.clusted_data[f].indices()[1][mask].unsqueeze(0)
+                values = self.clusted_data[f].values()[mask]
+                v = torch.sparse_coo_tensor(indices, values, [self.dim]).to_dense()
+                b_emb.append(v)
             b_idx = torch.stack(b_idx)
             b_emb = torch.stack(b_emb)
             ret_idx.append(b_idx)
@@ -190,7 +209,11 @@ class cluster_builder:
             v_dist = []
             v_idx = []
             for c in c_idx[i]:
-                v_c_dist, v_c_idx = self.second(v, self.clusted_data[c], k)
+                # original inner product
+                # v_c_dist, v_c_idx = self.second(v, self.clusted_data[c].to_dense(), k) # 15 iter/sec
+                # new operation for sparse tensor
+                v_c_dist, v_c_idx = self.second(top_k_sparse(v[None,:], self.sparse_dim)[0].coalesce(), self.clusted_data[c], k)  # 50 iter/sec
+                
                 v_dist.append(v_c_dist)
                 v_idx.append(torch.stack([c.tile(len(v_c_idx)), v_c_idx]).T)
             v_dist = torch.cat(v_dist)
@@ -202,11 +225,14 @@ class cluster_builder:
         idx = torch.stack(idx)
         return idx
 
-    def second(self,v,c,k):
+    def second(self, v ,c ,k):
         '''v: query with shape (d)
         c: cluster vectors with shape(n,d)
         out: output idx() with shape (k)'''
-        dist = inner(v[None,:], c)[0]#(n)
+        if c.is_sparse:
+            dist = custom_sparse_mmT(v, c)
+        else:
+            dist = inner(v[None,:], c)[0]#(n)
         d, idx = dist.topk(min(k,len(c)), dim = 0)#(k)
         return d.cpu(), idx.cpu()
 

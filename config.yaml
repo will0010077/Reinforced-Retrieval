@@ -22,9 +22,9 @@ model_config:
   embed_dim: 768
 
 cluster_config:
-  k: 100
+  k: 1000
   bs: 50000
-  lr: 0.1
+  lr: 0.05
   tol: 0.01
   num_search: 4
 

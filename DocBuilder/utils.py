@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 
+
 def top_k_sparse(x:Tensor, k:int, vec_dim:int=-1):
     '''
     x: Tensor
@@ -11,10 +12,17 @@ def top_k_sparse(x:Tensor, k:int, vec_dim:int=-1):
     if scale>(x.shape[vec_dim]/k):
         print(f'Warning! Sparsed result larger than original Tensor. scale: {scale}, sparsity: {(x.shape[vec_dim]/k)}')
     assert k<=x.shape[vec_dim]# check k smaller than original size
-    a, _=x.argsort(dim=vec_dim).split_with_sizes(split_sizes=[x.shape[vec_dim]-k, k], dim=vec_dim) #keep top k index
-    x=x.scatter(dim=vec_dim, index=a, value=0)#other index full with zero
-    x=(x).to_sparse()
-    return x
+    return_topk = x.topk(k, dim=-1)
+    i = torch.stack([torch.arange(x.shape[0], device=x.device).repeat_interleave(k), return_topk.indices.reshape([-1])])
+    v = return_topk.values.reshape([-1])
+    new_x = torch.sparse_coo_tensor(i, v, x.shape)
+
+    # old method
+    # a, _=x.argsort(dim=vec_dim).split_with_sizes(split_sizes=[x.shape[vec_dim]-k, k], dim=vec_dim) #keep top k index
+    # x.scatter_(dim=vec_dim, index=a, value=0)#other index full with zero
+    # x=(x).to_sparse()
+    # print((new_x.coalesce().values()==x.coalesce().values()).float().mean())
+    return new_x
 
 def generate_mask(x:Tensor, pad:int):
     '''
@@ -112,3 +120,6 @@ def check_Qmark(text:str):
     if '?' not in text:
         text+='?'
     return text
+
+def collate_list_to_tensor(batch:list[Tensor]):    
+    return torch.stack(batch).to_dense()

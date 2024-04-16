@@ -142,13 +142,13 @@ def collect_fn(batch):
             input_list_a.append(Q)
             input_list_b.append(A)
 
-    output_a = tokenizer (text=input_list_a,return_tensors="pt",padding=True,truncation=True,max_length=32)
-    output_b = tokenizer (text=input_list_b,return_tensors="pt",padding=True,truncation=True,max_length=128)
-
+    output_a = tokenizer (text=input_list_a, return_tensors="pt",padding=True,truncation=True, max_length=128)
+    output_b = tokenizer (text=input_list_b, return_tensors="pt",padding=True,truncation=True)
+    output_b = torch.cat([torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.cls_token_id, output_b, torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.eos_token_id], dim=1)#(B,256)
     return output_a, output_b
 
 
-def trainer(epoch,model, early_stop=None):
+def trainer(epoch, model:nn.Module, early_stop=None):
     model.train()
     ma_loss=3.4
     ma_dis=0
@@ -168,8 +168,9 @@ def trainer(epoch,model, early_stop=None):
         q = model(q)
         a = model(a)
         loss, dis =xt_xent(q, a, temperature=0.01)
+        dis = dis.item()
         loss += F_lambda*(flop_loss.forward(q)+flop_loss.forward(a))#vicreg(q,a)
-        loss += -dis*0.1
+        # loss += -dis*0.1
         loss.backward()
         optimizer.step()
 
@@ -226,7 +227,7 @@ if __name__=='__main__':
     val_size = len(dataset) - train_size
 
 
-    lex_MAE_retriver=lex_retriever(10000)
+    lex_MAE_retriver=lex_retriever()
     lex_MAE_retriver.to(device)
 
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])

@@ -2,7 +2,7 @@ import sys
 sys.path.append('../..')
 sys.path.append("app/lib/DocBuilder/")
 from DocBuilder.Retriever_k_means import cluster_builder, doc_retriever
-from DocBuilder.utils import cos_sim, top_k_sparse
+from DocBuilder.utils import top_k_sparse, inner
 from DocBuilder.LexMAE import lex_encoder,lex_decoder, lex_retriever
 import dataset
 import time,datetime
@@ -199,7 +199,6 @@ if __name__ == '__main__':
         random_nnn=sorted(random_nnn)
         print('Loading...')
         data=data[random_nnn]
-        print(data[::1000])
         
         
         print(data.shape)
@@ -221,30 +220,35 @@ if __name__ == '__main__':
         print(torch.load(f'data/data_reduced_{num_samples}.pt'))
     elif sys.argv[1]=="doc_build":
         cluster_config=config["cluster_config"]
-        data=torch.load('data/vecs_reduced_10000.pt') ## shape:(N,d)
+        data=torch.load('data/vecs_reduced_100000.pt') ## shape:(N,d)
 
         ## Train
-        print(data.shape)
+        print(len(data))
         print(data[:5])
         cluster = cluster_builder(k=cluster_config["k"])
-        cluster_ids_x, centers=cluster.train(data, epoch=50, bs = cluster_config['bs'], tol=cluster_config['tol'], lr=cluster_config['lr'])
+        cluster_ids_x, centers = cluster.train(data, epoch=5, bs = cluster_config['bs'], tol=cluster_config['tol'], lr=cluster_config['lr'])
         cluster.build()
         name = cluster.save()
         cluster.load(name)
     elif sys.argv[1]=="test":
         cluster_config=config["cluster_config"]
         cluster = cluster_builder(k=cluster_config["k"])
-        cluster.load('04_06_15_54')
+        cluster.load('04_16_21_21')
 
         lex_MAE_retriver=lex_retriever()
         lex_MAE_retriver.to('cpu')
         lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever838.pt', map_location='cpu')['enc_model_state_dict'])
 
-        data=torch.load('data/data_reduced_10000.pt') ## shape:(N,d)
+        data=torch.load('data/data_reduced_100000.pt') ## shape:(N,d)
         retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
         # retriever.to('cuda')
+        vec = torch.load('data/vecs_reduced_100000.pt') ## shape:(N,d)
 
-
+        for i in tqdm(range(100000)):
+            query = vec[i].to_dense()
+            seg, emb = retriever.retrieve(query, 10, 20)
+            print(inner(query[None,:], emb[0]))
+            
         while True:
             user= input('user:')
             seg, emb = retriever.retrieve(user)

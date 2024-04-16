@@ -1,24 +1,19 @@
-from Retriever import cluster_builder, cos_sim
+from DocBuilder.Retriever_k_means import cluster_builder
+from DocBuilder.utils import top_k_sparse
 import torch
 from tqdm import tqdm
 import time
 import os
-print(os.getcwd())
-print(os.path.dirname(__file__))
-
-class test:
-    def __init__(self, x):
-        while True:
-            _,x = x.split([10,x.shape[0]-10])
-            print('\r',x.shape)
-            time.sleep(0.1)
 
 cluster = cluster_builder(k=int(1*10**3))
 dim=768
-data=torch.cat([torch.randn([10**5,dim], device='cuda').cpu() for _ in range(10)])
+data=[]
+for _ in tqdm(range(10**5)):
+    data.extend(top_k_sparse(torch.randn([10**1,dim], device='cuda'), 128).cpu())
+print(len(data))
 # test(data)
 '''-------------------------------------------'''
-cluster_ids_x, centers=cluster.train(data, epoch=10, bs = 10**5, tol=0.1, lr=0.2)
+cluster_ids_x, centers=cluster.train(data, epoch=10, bs = 10**4, tol=0.1, lr=0.2)
 cluster.build()
 # cluster.save(t=87)
 # cluster.load(t=87)
