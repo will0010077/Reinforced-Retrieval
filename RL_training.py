@@ -32,14 +32,20 @@ end while
 
 '''
 
+def templete(doc_list:list[str], query:str, answer:str)->tuple[str]:
+    doc_list = '\n\n'.join(doc_list)
+    prompt = f'''<s> <<SYS>>\n This is the searched knowledge: [KNOW] {doc_list} [\KNOW]
+    Please answer user questions based on the above knowledge\n<</SYS>>
+    \n [INST] User:{query.strip()} [/INST] Assistant:'''
+    return prompt, prompt + answer
 def prepare_QA_token(tokenizer, doc:list[str], texts:list[str], targets:list[str]):
     '''
     
     '''
-    unlabel= ['\n\n'.join(d_list)+q for d_list, q,a in zip(doc, texts, targets)]
+    
+    unlabel, cat_qa = zip(*[templete(doc_list, q, a) for doc_list, q,a in zip(doc, texts, targets)])
     unlabel = tokenizer(text=unlabel).input_ids
-    print(max([len(s) for s in unlabel]))
-    cat_qa = ['\n\n'.join(d_list)+q+a for d_list, q,a in zip(doc, texts, targets)]
+    # print(max([len(s) for s in unlabel]))
     tokens = tokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=1024, truncation =True,).to(device)
     
     for i in range(len(texts)):
@@ -53,13 +59,13 @@ if __name__=="__main__":
 
     cluster_config=config["cluster_config"]
     cluster = cluster_builder(k=cluster_config["k"])
-    cluster.load('04_06_15_54')
+    cluster.load('04_16_21_21')
 
     lex_MAE_retriver=lex_retriever()
     lex_MAE_retriver.to('cpu')
     lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever838.pt', map_location='cpu')['enc_model_state_dict'])
 
-    data=torch.load('data/data_reduced_10000.pt') ## shape:(N,d)
+    data=torch.load('data/data_reduced_100000.pt') ## shape:(N,d)
     retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
     retriever.to(device)
 
@@ -71,26 +77,27 @@ if __name__=="__main__":
     LM =LLaMa_reader("MediaTek-Research/Breeze-7B-Instruct-v0_1")
 
     # init agent
-    policy = Transformer_Agent(in_dim = 30522)
+    policy = Transformer_Agent(in_dim = 30522, num_heads=6, num_layers=4, pos_dim=128)
     policy.to(device)
 
     optim = torch.optim.AdamW(policy.parameters(), lr = config['train_config']['agent_lr'])
     replay = doc_buffer(max_len=2**10)
 
     max_epoch = 10
-    num_retrieve=1
-    num_neg=16
-    num_RL_update = 4
+    num_retrieve=4
+    num_neg=32
+    num_RL_update = 8
 
     data_path='data/cleandata.pt'
     dataset=NQADataset(data_path=data_path)
+    dataset.data=dataset.data[:4]*10000
     loader = DataLoader(dataset, batch_size = 4, shuffle=True)
-    train_bar=tqdm(loader, ncols=0)
     
-    ma_loss=30
-    ma_reward=-3
+    ma_loss=10
+    ma_reward=-2
     iter=0
     for epoch in range(max_epoch):
+        train_bar=tqdm(loader, ncols=0)
         stream = torch.cuda.current_stream()
         for q, target in train_bar:
             iter+=1
@@ -130,33 +137,33 @@ if __name__=="__main__":
             # tokens['labels'] = None
             with torch.no_grad():
                 y, loss = LM.forward(**tokens)
+                del y
             # reward=torch.ones([len(q)])
             reward = -loss# temperaly, (B)
-            
-            
             # update replay buffer
             for i in range(len(q)):
                 if torch.isnan(reward[i]):
                     continue
-                t = transition(ret[i,:-1], outputs[i,1:], ret[i,1:], neg_set[i], reward[i])
+                t = transition(ret[i,:-1], outputs[i,1:], ret[i,1:], neg_set[i], reward[i]).to_sparse()
                 t.to('cpu', non_blocking=True)
                 replay.append(t)
             
             
-            if len(replay)>=1024 and iter%20==0:
+            if len(replay)>=128 and iter%20==0:
                 stream.synchronize()
                 for _ in range(num_RL_update):
                     for t in replay.sample(bs = 64, shuffle=True):
                         optim.zero_grad()
-                        t.to(device, non_blocking=True)
-                        ma_reward = ma_reward*0.99+t.rewards.mean().item()*0.01
-                        t.rewards-=ma_reward
+                        t.to(device)
+                        t.to_dense()
+                        ma_reward = ma_reward*0.98+t.rewards.mean().item()*0.02
                         # !!!policy update!!!
-                        loss = policy.get_loss(t).mean()
+                        pi_loss, v_loss, reg_loss, flops_loss = policy.get_loss(t)
+                        loss = (pi_loss + v_loss+ 0.005*reg_loss).mean() # + 0.0001*flops_loss
                         loss.backward()
                         optim.step()
                         ma_loss = ma_loss*0.99+loss*0.01
-                        train_bar.set_postfix_str(f'loss: {ma_loss:.4f}, reward: {ma_reward:.4f}')
+                        train_bar.set_postfix_str(f'loss: {pi_loss.mean():.4f}/{v_loss.mean():.4f}/{reg_loss.mean():.4f}/{ma_loss:.4f}, reward: {ma_reward:.4f}')
                     
 
             

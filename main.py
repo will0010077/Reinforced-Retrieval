@@ -194,11 +194,14 @@ if __name__ == '__main__':
         num_samples = config['data_config']['num_doc']
         
         # with reduced documents
-        random_sequence = torch.randperm(len(data))
-        random_nnn = random_sequence[:num_samples]
-        random_nnn=sorted(random_nnn)
+        print('randperm...')
+        random_sequence = torch.randperm(len(data), device=device)
+        print('sliceing...')
+        random_select = random_sequence[:num_samples]
+        print('sorting...')
+        random_select=torch.sort(random_select).values.cpu().numpy()
         print('Loading...')
-        data=data[random_nnn]
+        data=data[random_select]
         
         
         print(data.shape)
@@ -216,11 +219,11 @@ if __name__ == '__main__':
         torch.save(data, f'data/data_reduced_{num_samples}.pt')
         print('saved data_reduced.pt')
         
-        print(torch.load(f'data/vecs_reduced_{num_samples}.pt'))
-        print(torch.load(f'data/data_reduced_{num_samples}.pt'))
+        # print(torch.load(f'data/vecs_reduced_{num_samples}.pt'))
+        # print(torch.load(f'data/data_reduced_{num_samples}.pt'))
     elif sys.argv[1]=="doc_build":
         cluster_config=config["cluster_config"]
-        data=torch.load('data/vecs_reduced_100000.pt') ## shape:(N,d)
+        data=torch.load('data/vecs_reduced_5000000.pt') ## shape:(N,d)
 
         ## Train
         print(len(data))
@@ -246,7 +249,7 @@ if __name__ == '__main__':
 
         for i in tqdm(range(100000)):
             query = vec[i].to_dense()
-            seg, emb = retriever.retrieve(query, 10, 20)
+            seg, emb = retriever.retrieve(query, 100, 50)
             print(inner(query[None,:], emb[0]))
             
         while True:

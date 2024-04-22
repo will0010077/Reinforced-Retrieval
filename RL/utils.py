@@ -5,6 +5,7 @@ import torch
 from torch import Tensor, nn
 import math
 from DocBuilder.Retriever_k_means import inner
+from DocBuilder.utils import sparse_retrieve_rep
 import random
 class transition(nn.Module):
     def __init__(self, inputs:Tensor, preds:Tensor, ret:Tensor, neg:Tensor, rewards:Tensor):
@@ -16,11 +17,11 @@ class transition(nn.Module):
         rewards : (k) or scalar
         '''
         super().__init__()
-        self.register_buffer('inputs', inputs.detach().clone())
-        self.register_buffer('preds', preds.detach().clone())
-        self.register_buffer('ret', ret.detach().clone())
-        self.register_buffer('neg', neg.detach().clone())
-        self.register_buffer('rewards', rewards.detach().clone())
+        self.register_buffer('inputs', inputs.detach())
+        self.register_buffer('preds', preds.detach())
+        self.register_buffer('ret', ret.detach())
+        self.register_buffer('neg', neg.detach())
+        self.register_buffer('rewards', rewards.detach())
         self.inputs:Tensor
         self.preds:Tensor
         self.ret:Tensor
@@ -30,7 +31,18 @@ class transition(nn.Module):
         
     def __str__(self) -> str:
         return f'inputs:{self.inputs.shape}, outputs:{self.preds.shape}, ret:{self.ret.shape}, neg:{self.neg.shape}, rewards:{self.rewards.shape}'
-
+    def to_sparse(self):
+        self.inputs = self.inputs.to_sparse()
+        self.preds = self.preds.to_sparse()
+        self.ret = self.ret.to_sparse()
+        self.neg = self.neg.to_sparse()
+        return self
+    def to_dense(self):
+        self.inputs = self.inputs.to_dense()
+        self.preds = self.preds.to_dense()
+        self.ret = self.ret.to_dense()
+        self.neg = self.neg.to_dense()
+        return self
 
 class doc_buffer:
     def __init__(self, max_len=2**14):
@@ -100,12 +112,13 @@ class perturb_model(nn.Module):
         self.model=torch.nn.TransformerEncoder(self.layer, num_layers)
         # self.model = torch.nn.ModuleList([torch.nn.MultiheadAttention(dim, num_heads, batch_first=True) for _ in range(num_layers)])
         self.lam = torch.nn.Parameter(torch.tensor(-10,dtype=torch.float))
-        self.pos_encoder = PositionalEncoding(pos_dim, dropout=dropout, max_len=16, scale=0.01)
+        self.pos_encoder = PositionalEncoding(pos_dim, dropout=dropout, max_len=16, scale=0.1)
         self.dim=dim
         self.in_dim=in_dim
         
         self.scale1=torch.nn.Linear(in_dim + pos_dim, dim, bias=True)
         self.scale2=torch.nn.Linear(dim, in_dim, bias=True)
+        self.value = torch.nn.Linear(dim, 1)
                     
     def forward(self, x:torch.Tensor, mask=None)->Tensor:
         '''
@@ -120,18 +133,19 @@ class perturb_model(nn.Module):
             mask = torch.nn.Transformer.generate_square_subsequent_mask(x.shape[1], x.device)
         x=self.model.forward(x, mask)# + x #  (torch.nn.functional.sigmoid(self.lam))
             
-        x = self.scale2(x)
-        return x
+        out = self.scale2(x)
+        value = self.value(x)
+        return out, value
     
     
 class Transformer_Agent(nn.Module):
-    def __init__(self,in_dim, dim=768):
+    def __init__(self,in_dim, dim=768, **kwargs):
         super().__init__()
-        self.model = perturb_model(in_dim, dim)
-        self.lam = nn.Parameter(torch.ones(1)*-10, True)
+        self.model = perturb_model(in_dim, dim, **kwargs)
+        self.lam = nn.Parameter(torch.ones(1)*-5, True)
     def forward(self, x):
-        y=self.model.forward(x)
-        return self.lam.exp()*torch.log(1+y.relu_())+x
+        y, v=self.model.forward(x)
+        return self.lam.exp()*sparse_retrieve_rep(y)+x, v
     
     @torch.no_grad()
     def next(self, x:torch.Tensor):
@@ -139,7 +153,7 @@ class Transformer_Agent(nn.Module):
         x: (B,n,d)
         output: (B,d)
         '''
-        x = self.forward(x)
+        x, v = self.forward(x)
         
         return x[:,-1,:]
     
@@ -149,15 +163,23 @@ class Transformer_Agent(nn.Module):
         return : loss (B,k)
         '''
         t.neg#(([32, 5, 16, 30522]))
-        outputs = self.forward(t.inputs)#(32,5,30522)
-        neg = (outputs[:,:,None,:] * t.neg).sum(-1)*10
+        outputs, value = self.forward(t.inputs)#(32,5,30522)
+        temperture = 1
+        # get neg
+        neg = (outputs[:,:,None,:] * t.neg).sum(-1)/temperture
+        # get maximum number to prevent overflow
         M = torch.max(neg, dim=-1, keepdim=True).values#(32,5,1)
-        log_pi = (outputs * t.ret).sum(-1)*10 - M[:,:,0] - (neg-M).exp().sum(-1).log()
+        # log_softmax function
+        log_pi = (outputs * t.ret).sum(-1)/temperture - M[:,:,0] - (neg-M).exp().sum(-1).log()
         
-        loss = -t.rewards[:,None] * log_pi + 0.1*torch.abs(outputs).sum(-1)
+        adv = t.rewards[:,None] - value[...,0]
+        v_loss = adv**2
+        pi_loss = - adv.detach() * log_pi
         # regularization to original input query
-        loss += 0.1*((outputs - t.inputs)**2).sum(-1)
-        return loss    
+        reg_loss = ((outputs - t.inputs)**2).sum(-1)
+        # FLOPS loss
+        flops_loss = torch.abs(outputs).sum(-1)**2
+        return pi_loss, v_loss, reg_loss, flops_loss   
 
 if __name__=='__main__':
     

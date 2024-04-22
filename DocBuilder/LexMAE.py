@@ -118,8 +118,9 @@ class lex_retriever(torch.nn.Module):
             idx['input_ids'] = idx['input_ids'].to(self.model.model.device)
             feature  = self.forward(idx)#(bs, d)
 
-            sparse_feature = top_k_sparse(feature, 128)
-            feature_list[i*bs: i*bs+bs] = sparse_feature.cpu()
+            # sparse_feature = [top_k_sparse(v, 128).cpu() for v in feature]
+            sparse_feature = top_k_sparse(feature, 128).cpu()
+            feature_list[i*bs: i*bs+bs] = sparse_feature
         return  feature_list
     def collate(self, ids):
         ids = torch.stack(ids)

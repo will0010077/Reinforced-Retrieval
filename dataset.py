@@ -76,7 +76,7 @@ class NQADataset():
                     # yield out[0], out[1].strip()\
         return res
 
-def segmentation(shared_dict,file_lock,shared_int,segment, window_size, step, output_file='app/data/segmented_data.h5'):
+def segmentation(shared_dict, file_lock, shared_int, segment, window_size, step, output_file='app/data/segmented_data.h5'):
     '''load data, segmented to 288 token id, save to h5py'''
 
     # Token indices sequence length is longer than the specified maximum sequence length for this model (14441966 > 512).
@@ -110,7 +110,7 @@ def segmentation(shared_dict,file_lock,shared_int,segment, window_size, step, ou
         if first:
             segment_data=generate_segments(text, window_size, step)
             try:
-                f=h5py.File(output_file, 'w')
+                f=h5py.File(output_file, 'w', fs_strategy = 'page')
                 if 'segments' not in f:
                     f.create_dataset('segments', data=segment_data, maxshape=(None, segment_data.shape[1]), dtype='i')
             finally:
@@ -216,7 +216,7 @@ class DocumentDatasets():
     def __init__(self, path='app/data/segmented_data_', num_file=12) -> None:
         self.file_index = num_file
 
-        self.file_list = [h5py.File(path+f"{i}.h5", 'r')[u'segments'] for i in range(self.file_index)]
+        self.file_list = [h5py.File(path+f"{i}.h5", 'r', page_buf_size = 2**7 * 2**20)[u'segments'] for i in range(self.file_index)]
         self.file_len = [f.shape[0] for f in self.file_list]
         self.offset = [0]
         for i in range(0, len(self.file_len)-1):
@@ -227,12 +227,16 @@ class DocumentDatasets():
 
         for i in reversed(range(len(self.offset))):
             if idx >= self.offset[i]:
-                return torch.tensor(self.file_list[i][idx-self.offset[i]],dtype=torch.long)
+                return torch.from_numpy(self.file_list[i][idx-self.offset[i]])
                 
         raise IndexError(idx)
     
     def get_multi(self, ids, inverted_index, return_pt):
-        for idx in ids:
+        if len(ids)>10**5:
+            bar = tqdm(ids, ncols=0)
+        else:
+            bar = ids
+        for idx in bar:
             return_pt[inverted_index[idx]] = self.get_single(idx)
             
     def __getitem__(self , ids):
@@ -249,11 +253,19 @@ class DocumentDatasets():
             inverted_index = {ele: i for i, ele in enumerate(ids)}
             return_pt=torch.empty([len(ids), self.shape[1]], dtype=torch.long)
             
-            num_thread = 8
-            step = len(ids)//num_thread+1
-            pool = [Thread(target=self.get_multi, args=(ids[i:i+step], inverted_index, return_pt)) for i in range(0, len(ids), step)]
-            [t.start() for t in pool]
-            [t.join() for t in pool]
+            if len(ids)>10**5:
+                bar = tqdm(ids, ncols=0)
+            else:
+                bar = ids
+            for i, idx in enumerate(bar):
+                return_pt[i] = self.get_single(idx)
+                
+            #!!! this is slower!!!
+            # num_thread = 8
+            # step = len(ids)//num_thread+1
+            # pool = [Thread(target=self.get_multi, args=(ids[i:i+step], inverted_index, return_pt)) for i in range(0, len(ids), step)]
+            # [t.start() for t in pool]
+            # [t.join() for t in pool]
 
             return return_pt
 

@@ -69,8 +69,9 @@ class cluster_builder:
         for _ in range(epoch):
             bar=  tqdm(loader, ncols = 80)
             for data in bar:
-                data = data.to(device)
-                data = torch.cat([data, mu],dim=0)
+                data:Tensor = data.to(device)
+                data.set_(size=[data.shape[0]+self.k, data.shape[1]])
+                data[-self.k:] = mu
                 dis=float('inf')
                 count=0
                 while dis>tol and count<100:
@@ -205,14 +206,16 @@ class cluster_builder:
 
         idx = []
         for i, v in enumerate(x):
+            v = top_k_sparse(v[None,:], self.sparse_dim)[0].coalesce()
             v=v.cpu()
+            
             v_dist = []
             v_idx = []
             for c in c_idx[i]:
                 # original inner product
                 # v_c_dist, v_c_idx = self.second(v, self.clusted_data[c].to_dense(), k) # 15 iter/sec
                 # new operation for sparse tensor
-                v_c_dist, v_c_idx = self.second(top_k_sparse(v[None,:], self.sparse_dim)[0].coalesce(), self.clusted_data[c], k)  # 50 iter/sec
+                v_c_dist, v_c_idx = self.second(v, self.clusted_data[c], k)  # 50 iter/sec
                 
                 v_dist.append(v_c_dist)
                 v_idx.append(torch.stack([c.tile(len(v_c_idx)), v_c_idx]).T)

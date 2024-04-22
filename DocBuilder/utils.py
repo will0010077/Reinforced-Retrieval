@@ -8,14 +8,21 @@ def top_k_sparse(x:Tensor, k:int, vec_dim:int=-1):
     vec_dim: data dim, default -1
     out: sparsed x
     '''
-    scale=len(x.shape)*2+1
+    dim = len(x.shape)
+    scale=dim*2+1
     if scale>(x.shape[vec_dim]/k):
         print(f'Warning! Sparsed result larger than original Tensor. scale: {scale}, sparsity: {(x.shape[vec_dim]/k)}')
     assert k<=x.shape[vec_dim]# check k smaller than original size
-    return_topk = x.topk(k, dim=-1)
-    i = torch.stack([torch.arange(x.shape[0], device=x.device).repeat_interleave(k), return_topk.indices.reshape([-1])])
+    return_topk = x.topk(k, dim=vec_dim)
+    if dim==2:
+        i = torch.stack([torch.arange(x.shape[0], device=x.device).repeat_interleave(k), return_topk.indices.reshape([-1])])
+    else:
+        i = return_topk.indices.reshape([1,-1])
+        
     v = return_topk.values.reshape([-1])
-    new_x = torch.sparse_coo_tensor(i, v, x.shape)
+    mask = v!=0
+    i, v = i[mask[None,...].repeat([dim,1])].reshape([dim,-1]), v[mask]
+    new_x = torch.sparse_coo_tensor(i, v, x.shape, is_coalesced=True)
 
     # old method
     # a, _=x.argsort(dim=vec_dim).split_with_sizes(split_sizes=[x.shape[vec_dim]-k, k], dim=vec_dim) #keep top k index
@@ -36,7 +43,7 @@ def generate_mask(x:Tensor, pad:int):
     return mask
 
 def sparse_retrieve_rep(x:Tensor):
-    return torch.log(1+torch.relu(x))
+    return torch.log(1+torch.relu_(x))
 
 def max_pooling(token_embeddings:Tensor, mask:Tensor):
     token_embeddings.masked_fill_(~mask.bool()[..., None], float('-inf'))

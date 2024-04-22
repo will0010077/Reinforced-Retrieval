@@ -4,7 +4,7 @@ train_config:
   num_samples : null
   enc_lr : 5.e-5
   lm_lr : 1.e-5
-  agent_lr : 5.e-5
+  agent_lr : 3.e-4
   betas: [0.9, 0.99]
   weight_decay : 0.01
   topk : 1
@@ -22,14 +22,14 @@ model_config:
   embed_dim: 768
 
 cluster_config:
-  k: 1000
-  bs: 50000
+  k: 2000
+  bs: 100000
   lr: 0.05
   tol: 0.01
   num_search: 4
 
 data_config:
-  num_doc: 100000
+  num_doc: 5000000
   num_samples: 100000
   windows: 96
   step: 64

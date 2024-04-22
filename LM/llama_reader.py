@@ -111,15 +111,15 @@ class LLaMa_reader:
         labels:Tensor
         
         if labels is not None:
-            stream=torch.cuda.current_stream()
             labels = labels
             # Shift so that tokens < n predict n
             shift_logits = lm_logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             # Flatten the tokens
-            loss_fct = torch.nn.CrossEntropyLoss()
-            stream.synchronize()
-            loss = torch.stack([loss_fct(shift_logits[i], shift_labels[i]) for i in range(len(labels))])
+            loss = -torch.log_softmax(shift_logits, dim=-1)[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
+            mask = shift_labels==-100
+            loss = loss.masked_fill_(mask, 0)
+            loss = loss.sum(-1)/(~mask).sum(-1)
         
         return lm_logits, loss
 
