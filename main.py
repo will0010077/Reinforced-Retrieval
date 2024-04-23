@@ -213,6 +213,7 @@ if __name__ == '__main__':
         print('load weight from',load_path)
         
         feature = lex_MAE_retriver.get_feature(data, 256)
+        # feature = torch.nested.nested_tensor(feature) # not supported
         torch.save(feature, f'data/vecs_reduced_{num_samples}.pt')
         print('saved vecs_reduced.pt')
 
@@ -236,21 +237,21 @@ if __name__ == '__main__':
     elif sys.argv[1]=="test":
         cluster_config=config["cluster_config"]
         cluster = cluster_builder(k=cluster_config["k"])
-        cluster.load('04_16_21_21')
+        cluster.load('04_23_04_32')
 
         lex_MAE_retriver=lex_retriever()
         lex_MAE_retriver.to('cpu')
         lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever838.pt', map_location='cpu')['enc_model_state_dict'])
 
-        data=torch.load('data/data_reduced_100000.pt') ## shape:(N,d)
+        data=torch.load('data/data_reduced_5000000.pt') ## shape:(N,d)
         retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
         # retriever.to('cuda')
-        vec = torch.load('data/vecs_reduced_100000.pt') ## shape:(N,d)
+        # vec = torch.load('data/vecs_reduced_5000000.pt') ## shape:(N,d)
 
-        for i in tqdm(range(100000)):
-            query = vec[i].to_dense()
-            seg, emb = retriever.retrieve(query, 100, 50)
-            print(inner(query[None,:], emb[0]))
+        # for i in tqdm(range(100000)):
+        #     query = vec[i].to_dense()
+        #     seg, emb = retriever.retrieve(query, 100, 50)
+        #     print(inner(query[None,:], emb[0]))
             
         while True:
             user= input('user:')

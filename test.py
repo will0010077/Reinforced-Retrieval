@@ -1,14 +1,23 @@
 
 import torch
-a = torch.randperm(10)
-b = a.argsort()
-c = b.argsort()
-d= sorted(zip(a,c), key=lambda x:x[1])
-d = list(zip(*d))[0]
-print(a,b,c,d)
-exit(0)
-import sys
 from time import time
+a = torch.empty([2**20//4, 2**10], dtype=torch.float)
+b = [*a.reshape([2**10,2**10//4, 2**10])]
+s = time()
+torch.save(a, 'data/big_a.pt')
+print('a: ', time()-s)
+s = time()
+torch.save(b, 'data/big_b.pt')
+print('b: ', time()-s)
+
+s = time()
+torch.load('data/big_a.pt')
+print('a: ', time()-s)
+s = time()
+torch.load('data/big_b.pt')
+print('b: ', time()-s)
+exit()
+import sys
 from transformers import AutoTokenizer
 from LexMAE import lex_retriever
 def top_k_sparse(x:torch.Tensor, k:int, vec_dim:int=-1):

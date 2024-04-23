@@ -59,13 +59,13 @@ if __name__=="__main__":
 
     cluster_config=config["cluster_config"]
     cluster = cluster_builder(k=cluster_config["k"])
-    cluster.load('04_16_21_21')
+    cluster.load('04_23_04_32')
 
     lex_MAE_retriver=lex_retriever()
     lex_MAE_retriver.to('cpu')
     lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever838.pt', map_location='cpu')['enc_model_state_dict'])
 
-    data=torch.load('data/data_reduced_100000.pt') ## shape:(N,d)
+    data=torch.load('data/data_reduced_5000000.pt') ## shape:(N,d)
     retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
     retriever.to(device)
 

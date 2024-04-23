@@ -130,3 +130,21 @@ def check_Qmark(text:str):
 
 def collate_list_to_tensor(batch:list[Tensor]):    
     return torch.stack(batch).to_dense()
+
+def split_list_to_batch(data:list[Tensor], bs = 2**11):
+    '''
+    data : list of vector
+    return : list of batched vector (matrix)
+    '''
+    size = len(data)
+    return [torch.stack(data[i:i+bs]).coalesce() for i in range(0, size, bs)]
+
+def restore_batched_list(data:list[Tensor]):
+    '''
+    data : list of batched vector (matrix)
+    return : list of vector
+    '''
+    new_data=[]
+    for M in data:
+        new_data.extend(M)
+    return new_data

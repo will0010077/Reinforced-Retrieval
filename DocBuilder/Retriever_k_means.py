@@ -37,6 +37,7 @@ class cluster_builder:
         u = [x[r==i].mean(dim=0) for i in range(self.k)]
         u = torch.stack(u)
         u = u*lr + mu*(1-lr)
+        u = top_k_sparse(u, 512).to_dense()
 
         dis=(u-mu).norm(dim=-1).mean()
 
@@ -44,8 +45,8 @@ class cluster_builder:
 
     def get_r(self, x, mu):
         '''x: (n, c), mu: (k, c), r: (n)'''
-        dis=inner(x, mu)
-        min_k=torch.argmin(dis, axis=1)
+        dis=inner(x, mu)#this was a bug!! please rename them
+        min_k=torch.argmax(dis, axis=1)
         min_k[-self.k:]=torch.arange(self.k, device=min_k.device)
         return min_k
 
@@ -53,7 +54,7 @@ class cluster_builder:
         '''random select k start point from data to avoid some cluster do not have any data.'''
         perm = torch.randperm(len(x), dtype=torch.int)
         # return x[:k]
-        return x[perm[:k]]
+        return torch.stack([x[i] for i in perm[:k]]).to_dense()
     def rand_init_mu(self, x, k):
         '''random start point '''
         return torch.randn((k,len(x[0])))
@@ -65,12 +66,12 @@ class cluster_builder:
         self.data = data
         loader = DataLoader(self.data, batch_size=bs, shuffle=True, collate_fn=collate_list_to_tensor)
 
-        mu = self.rand_init_mu(self.data, self.k).to(device)
+        mu = self.select_init_mu(self.data, self.k).to(device)
         for _ in range(epoch):
             bar=  tqdm(loader, ncols = 80)
             for data in bar:
                 data:Tensor = data.to(device)
-                data.set_(size=[data.shape[0]+self.k, data.shape[1]])
+                data.resize_([data.shape[0]+self.k, data.shape[1]])
                 data[-self.k:] = mu
                 dis=float('inf')
                 count=0
