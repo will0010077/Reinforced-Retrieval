@@ -253,7 +253,7 @@ class DocumentDatasets():
             inverted_index = {ele: i for i, ele in enumerate(ids)}
             return_pt=torch.empty([len(ids), self.shape[1]], dtype=torch.long)
             
-            if len(ids)>10**5:
+            if len(ids)>=10**4:
                 bar = tqdm(ids, ncols=0)
             else:
                 bar = ids

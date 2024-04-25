@@ -64,14 +64,15 @@ class cluster_builder:
         # assert len(data)>=self.k
 
         self.data = data
-        loader = DataLoader(self.data, batch_size=bs, shuffle=True, collate_fn=collate_list_to_tensor)
+        loader = DataLoader(self.data, batch_size=bs, shuffle=True, collate_fn=collate_list_to_tensor, num_workers=4, persistent_workers=True)
 
         mu = self.select_init_mu(self.data, self.k).to(device)
         for _ in range(epoch):
             bar=  tqdm(loader, ncols = 80)
             for data in bar:
                 data:Tensor = data.to(device)
-                data.resize_([data.shape[0]+self.k, data.shape[1]])
+                data.sparse_resize_([data.shape[0]+self.k, data.shape[1]], data.sparse_dim(), data.dense_dim())
+                data = data.to_dense()
                 data[-self.k:] = mu
                 dis=float('inf')
                 count=0
@@ -81,7 +82,9 @@ class cluster_builder:
                     r = self.get_r(data, mu)
                     mu, dis = self.get_mu(data, r, mu, lr)
                     bar.set_description_str(f'dist:{dis:.4f}')
-
+            del data, r
+        del loader
+        
         self.idx = self.get_idx(mu, bs).cpu()
         self.centers=mu
     
@@ -90,11 +93,12 @@ class cluster_builder:
     def get_idx(self, mu, bs):
         '''compute each data->cluster
         out: (N)'''
-        loader = DataLoader(self.data, batch_size=bs, shuffle=False, collate_fn=collate_list_to_tensor)
+        loader = DataLoader(self.data, batch_size=bs, shuffle=False, collate_fn=collate_list_to_tensor, num_workers=4)
         bar=  tqdm(loader, ncols = 80)
         idx = []
         for data in bar:
-            data = data.to(device)
+            data:Tensor = data.to(device)
+            data = data.to_dense()
             r = self.get_r(data, mu)
             idx.append(r)
         idx = torch.cat(idx)

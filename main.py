@@ -2,7 +2,7 @@ import sys
 sys.path.append('../..')
 sys.path.append("app/lib/DocBuilder/")
 from DocBuilder.Retriever_k_means import cluster_builder, doc_retriever
-from DocBuilder.utils import top_k_sparse, inner
+from DocBuilder.utils import top_k_sparse, inner, unbind_sparse
 from DocBuilder.LexMAE import lex_encoder,lex_decoder, lex_retriever
 import dataset
 import time,datetime
@@ -225,12 +225,14 @@ if __name__ == '__main__':
     elif sys.argv[1]=="doc_build":
         cluster_config=config["cluster_config"]
         data=torch.load('data/vecs_reduced_5000000.pt') ## shape:(N,d)
+        print('converting...')
+        data = unbind_sparse(data)
 
         ## Train
         print(len(data))
-        print(data[:5])
+        print(data[:2])
         cluster = cluster_builder(k=cluster_config["k"])
-        cluster_ids_x, centers = cluster.train(data, epoch=5, bs = cluster_config['bs'], tol=cluster_config['tol'], lr=cluster_config['lr'])
+        cluster_ids_x, centers = cluster.train(data, epoch=20, bs = cluster_config['bs'], tol=cluster_config['tol'], lr=cluster_config['lr'])
         cluster.build()
         name = cluster.save()
         cluster.load(name)

@@ -6,6 +6,7 @@ from tqdm import tqdm
 from RL.utils import *
 from DocBuilder.Retriever_k_means import cluster_builder, doc_retriever
 from DocBuilder.LexMAE import lex_retriever
+from DocBuilder.utils import restore_batched_list
 from LM.llama_reader import LLaMa_reader
 from fintune_contriver import NQADataset
 import yaml

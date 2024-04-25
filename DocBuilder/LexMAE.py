@@ -110,7 +110,7 @@ class lex_retriever(torch.nn.Module):
         temp = self.collate([ids[0]])
         temp['input_ids'] = temp['input_ids'].to(self.model.model.device)
         feature_shape  = self.forward(temp).shape[1]
-        feature_list=[None]*len(ids)
+        feature_list=[]
 
 
         dataloader = DataLoader(ids, batch_size=bs, shuffle=False, collate_fn=self.collate, num_workers=8)
@@ -119,9 +119,9 @@ class lex_retriever(torch.nn.Module):
             feature  = self.forward(idx)#(bs, d)
 
             # sparse_feature = [top_k_sparse(v, 128).cpu() for v in feature]
-            sparse_feature = top_k_sparse(feature, 128).cpu()
-            feature_list[i*bs: i*bs+bs] = sparse_feature
-        return  feature_list
+            sparse_feature = top_k_sparse(feature, 128).cpu() # (bs, d) with sparse
+            feature_list.append(sparse_feature) # (len, bs, d)
+        return  torch.cat(feature_list)
     def collate(self, ids):
         ids = torch.stack(ids)
         return {'input_ids':ids}

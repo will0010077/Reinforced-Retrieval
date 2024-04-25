@@ -23,13 +23,13 @@ model_config:
 
 cluster_config:
   k: 2000
-  bs: 50000
+  bs: 100000
   lr: 0.1
-  tol: 0.01
+  tol: 1
   num_search: 4
 
 data_config:
-  num_doc: 500000
+  num_doc: 100000
   num_samples: 100000
   windows: 96
   step: 64

@@ -1,7 +1,8 @@
 import torch
 from torch import Tensor
-
-
+from tqdm import tqdm
+import multiprocessing as mp
+import time
 def top_k_sparse(x:Tensor, k:int, vec_dim:int=-1):
     '''
     x: Tensor
@@ -129,22 +130,48 @@ def check_Qmark(text:str):
     return text
 
 def collate_list_to_tensor(batch:list[Tensor]):    
-    return torch.stack(batch).to_dense()
+    return torch.stack(batch)
 
-def split_list_to_batch(data:list[Tensor], bs = 2**11):
+def split_list_to_batch(data:list[Tensor], bs = 2**10):
     '''
     data : list of vector
     return : list of batched vector (matrix)
     '''
     size = len(data)
-    return [torch.stack(data[i:i+bs]).coalesce() for i in range(0, size, bs)]
+    return [torch.stack(data[i:i+bs]) for i in tqdm(range(0, size, bs), ncols=0)]
 
 def restore_batched_list(data:list[Tensor]):
     '''
     data : list of batched vector (matrix)
     return : list of vector
     '''
-    new_data=[]
-    for M in data:
-        new_data.extend(M)
+    new_data = []
+    for _ in tqdm(range(len(data)), ncols=0):
+        new_data.extend(data.pop(0))
     return new_data
+
+def unbind_sparse(data:Tensor, use_sort=False):
+    data = data.coalesce()
+    size = data.shape
+    if use_sort:
+        arg_sort = torch.argsort(data.indices()[0])
+        new_indices = data.indices()[:,arg_sort]
+        new_values = data.values()[arg_sort]
+    else:
+        new_indices = data.indices()
+        new_values = data.values()
+        
+    del data
+    ele, counts = torch.unique(new_indices[0], return_counts=True)
+    new_counts = torch.zeros([size[0]], dtype=torch.long)
+    new_counts[ele] = counts
+    new_indices = torch.split_with_sizes(new_indices[1], new_counts.tolist())
+    new_values = torch.split_with_sizes(new_values, new_counts.tolist())
+    
+    bar = tqdm(total = size[0], ncols=0)
+    def collate_fn(i, v):
+        bar.update()
+        return torch.sparse_coo_tensor(i[None,:], v, size=[size[1]])
+    
+    return [*map(collate_fn, new_indices, new_values)]
+    

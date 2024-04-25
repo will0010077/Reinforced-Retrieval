@@ -1,22 +1,35 @@
 
 import torch
 from time import time
-a = torch.empty([2**20//4, 2**10], dtype=torch.float)
-b = [*a.reshape([2**10,2**10//4, 2**10])]
-s = time()
-torch.save(a, 'data/big_a.pt')
-print('a: ', time()-s)
-s = time()
-torch.save(b, 'data/big_b.pt')
-print('b: ', time()-s)
-
-s = time()
-torch.load('data/big_a.pt')
-print('a: ', time()-s)
-s = time()
-torch.load('data/big_b.pt')
-print('b: ', time()-s)
-exit()
+from DocBuilder.utils import split_list_to_batch, restore_batched_list, unbind_sparse
+if __name__=='__main__':
+    a = torch.randn([32,10]).to_sparse()
+    print(a.sparse_dim(), a.dense_dim())
+    a.sparse_resize_([64,10], a.sparse_dim(), a.dense_dim())
+    print(a)
+    exit()
+    
+    s=time()    
+    a = torch.load('data/vecs_reduced_5000000.pt',mmap=False)
+    print(time()-s)
+    
+    print(a[10000])
+    
+    s=time()
+    # a = restore_batched_list(a)
+    a = unbind_sparse(a)
+    
+    print(time()-s)
+    print(a[10000])
+    exit()
+    s=time()
+    # a = split_list_to_batch(a, bs=32)
+    print(time()-s)
+    s=time()
+    torch.save(a, 'data/vecs_reduced_5000000.pt')
+    print(time()-s)
+    s=time()
+    exit()
 import sys
 from transformers import AutoTokenizer
 from LexMAE import lex_retriever
