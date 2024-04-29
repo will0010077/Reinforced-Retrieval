@@ -37,51 +37,54 @@ class cluster_builder:
         u = [x[r==i].mean(dim=0) for i in range(self.k)]
         u = torch.stack(u)
         u = u*lr + mu*(1-lr)
-        u = top_k_sparse(u, 512).to_dense()
+        u = top_k_sparse(u, 256).to_dense()
 
         dis=(u-mu).norm(dim=-1).mean()
 
         return u, dis
 
-    def get_r(self, x, mu):
+    def get_r(self, x, mu)->Tensor:
         '''x: (n, c), mu: (k, c), r: (n)'''
         dis=inner(x, mu)#this was a bug!! please rename them
-        min_k=torch.argmax(dis, axis=1)
+        min_k = torch.argmax(dis, axis=1)
         min_k[-self.k:]=torch.arange(self.k, device=min_k.device)
         return min_k
 
-    def select_init_mu(self, x, k):
+    def select_init_mu(self, x, k)->Tensor:
         '''random select k start point from data to avoid some cluster do not have any data.'''
         perm = torch.randperm(len(x), dtype=torch.int)
         # return x[:k]
         return torch.stack([x[i] for i in perm[:k]]).to_dense()
-    def rand_init_mu(self, x, k):
+    def rand_init_mu(self, x, k)->Tensor:
         '''random start point '''
-        return torch.randn((k,len(x[0])))
+        return torch.randn((k,x[0].shape[0])).relu_()
 
     def train(self, data, epoch=10, bs = 10**5, tol=0.1, lr=0.2):
         print('cluster training...')
         # assert len(data)>=self.k
-
+        # try this https://arxiv.org/abs/1507.05910
         self.data = data
+        self.size = [len(data), len(data[0])]
         loader = DataLoader(self.data, batch_size=bs, shuffle=True, collate_fn=collate_list_to_tensor, num_workers=4, persistent_workers=True)
 
         mu = self.select_init_mu(self.data, self.k).to(device)
         for _ in range(epoch):
-            bar=  tqdm(loader, ncols = 80)
+            bar=  tqdm(loader, ncols = 0)
             for data in bar:
                 data:Tensor = data.to(device)
                 data.sparse_resize_([data.shape[0]+self.k, data.shape[1]], data.sparse_dim(), data.dense_dim())
                 data = data.to_dense()
                 data[-self.k:] = mu
                 dis=float('inf')
-                count=0
-                while dis>tol and count<100:
-                    count+=1
+                it=0
+                while dis>tol and it<100:
+                    it+=1
                     # data[-self.k:, :]=mu
                     r = self.get_r(data, mu)
                     mu, dis = self.get_mu(data, r, mu, lr)
-                    bar.set_description_str(f'dist:{dis:.4f}')
+                    ele, count = r.unique(return_counts = True)
+                    mu[ele[count.argmin()]] = mu[ele[count.argmax()]]+0.001*torch.randn([self.size[1]], device=mu.device)
+                    bar.set_description_str(f'dist:{dis:.4f}, max/min: {max(count)/min(count):.1f}')
             del data, r
         del loader
         
@@ -117,6 +120,9 @@ class cluster_builder:
         _, count = temp_idx.unique(return_counts = True)
         del _
         count=count.tolist()
+        sort_count = sorted(count)
+        print('Maximum cluster:',sort_count[-10:],', minimum cluster:',sort_count[:10])
+        
         series = torch.arange(len(self.idx))
         series = series[argsort_idx]
         self.clusted_idx = series.split(count)
@@ -128,13 +134,14 @@ class cluster_builder:
         # self.data[:] = self.data[argsort_idx]
         '''--------------------------------'''
         '''new sort method'''
-        self.data = sorted(zip(self.data, argsort_idx.argsort()), key=lambda x:x[1])
-        self.data = list(zip(*self.data))[0]
+        self.data = [*zip(self.data, argsort_idx.argsort())]
+        self.data.sort(key=lambda x:x[1])
+        self.data = [*zip(*self.data)][0]
         '''-----------------------'''
         # self.clusted_data = self.data.split(count)
         '''new split method for list'''
         self.clusted_data = [torch.stack(self.data[sum(count[:i]):sum(count[:i+1])]).coalesce() for i in range(len(count))]
-        print('coalesced:',self.clusted_data[0].is_coalesced())
+
         del self.data
         print('build cluster done...')
 
@@ -148,7 +155,7 @@ class cluster_builder:
         if name is None:
             name = datetime.datetime.now().strftime('%m_%d_%H_%M')
         data_path = f'data/clusted_data_{name}.pt'
-        torch.save({'center':self.centers, 'idx':self.clusted_idx, 'data':self.clusted_data}, data_path)
+        torch.save({'center':self.centers.to_sparse(), 'idx':self.clusted_idx, 'data':self.clusted_data}, data_path)
         print('save done!!')
         return name
 
@@ -158,10 +165,10 @@ class cluster_builder:
         assert name is not None
         data_path = f'data/clusted_data_{name}.pt'
         loaded_dict = torch.load(data_path, map_location='cpu')
-        self.centers = loaded_dict['center']
+        self.centers = loaded_dict['center'].to_dense()
         self.clusted_idx = loaded_dict['idx']
         self.clusted_data = loaded_dict['data']
-        print('coalesced:',self.clusted_data[0].is_coalesced())
+
         self.dim = self.centers.shape[-1]
         if self.centers.shape[0]!=self.k:
             raise RuntimeError(f'The cluster with k={self.centers.shape[0]} and init k={self.k} are not the same!')

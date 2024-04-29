@@ -32,7 +32,7 @@ class lex_encoder(torch.nn.Module):
         x: dict[input_ids, attention_mask]
         output: Tensor[B, d]
         '''
-        mask = x.get('attention_mask',None)
+        mask = x.get('attention_masks',None)
         if mask is None:
             mask=generate_mask(x['input_ids'], self.tokenizer.pad_token_id)
         output=self.model(input_ids = x.get('input_ids',None), attention_mask = mask, output_hidden_states=True)
@@ -88,15 +88,15 @@ class lex_retriever(torch.nn.Module):
         if out_dim is not None:
             self.proj = torch.nn.Linear(768, out_dim)
 
-    def forward(self, x:dict):
+    def forward(self, x:dict, output_soft:bool=False):
         mask = x.get('attention_mask',None)
         if mask is None:
             mask=generate_mask(x['input_ids'], self.tokenizer.pad_token_id)
             
         logits, hidden_state, b= self.model.forward(x, output_low=False)
 
-        if hasattr(self, 'proj'):
-            return sparse_retrieve_rep(self.proj(b))
+        if output_soft:
+            return torch.softmax(max_pooling(logits, mask), dim=-1)
         return sparse_retrieve_rep(max_pooling(logits, mask))
         return sparse_retrieve_rep(b)
         return sparse_retrieve_rep(max_pooling(hidden_state, mask))
@@ -107,6 +107,7 @@ class lex_retriever(torch.nn.Module):
         '''
         return: tensor with shape:(N, 768)
         '''
+        self.train()
         temp = self.collate([ids[0]])
         temp['input_ids'] = temp['input_ids'].to(self.model.model.device)
         feature_shape  = self.forward(temp).shape[1]
@@ -119,7 +120,7 @@ class lex_retriever(torch.nn.Module):
             feature  = self.forward(idx)#(bs, d)
 
             # sparse_feature = [top_k_sparse(v, 128).cpu() for v in feature]
-            sparse_feature = top_k_sparse(feature, 128).cpu() # (bs, d) with sparse
+            sparse_feature = top_k_sparse(feature, config['cluster_config']['k_sparse']).cpu() # (bs, d) with sparse
             feature_list.append(sparse_feature) # (len, bs, d)
         return  torch.cat(feature_list)
     def collate(self, ids):

@@ -14,14 +14,13 @@ import re
 from transformers import AutoTokenizer, AutoModel, BertTokenizerFast
 import yaml,os
 from DocBuilder.LexMAE import lex_retriever
+from DocBuilder.utils import top_k_sparse
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 
 
 # from contriver import Contriever
 seed = config['seed']
-# torch.manual_seed(seed)
-# random.seed(seed)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -143,8 +142,8 @@ def collect_fn(batch):
             input_list_b.append(A)
 
     output_a = tokenizer (text=input_list_a, return_tensors="pt",padding=True,truncation=True, max_length=128)
-    output_b = tokenizer (text=input_list_b, return_tensors="pt",padding=True,truncation=True)
-    output_b = torch.cat([torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.cls_token_id, output_b, torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.eos_token_id], dim=1)#(B,256)
+    output_b = tokenizer (text=input_list_b, return_tensors="pt",padding=True,truncation=True, max_length=128)
+    # output_b = torch.cat([torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.cls_token_id, output_b, torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.eos_token_id], dim=1)#(B,256)
     return output_a, output_b
 
 
@@ -153,7 +152,7 @@ def trainer(epoch, model:nn.Module, early_stop=None):
     ma_loss=3.4
     ma_dis=0
     ma_acc=0.5
-    F_lambda=0.01
+    F_lambda=0.004
     flop_loss=FLOPS()
     count=0
     for q,a in (bar:=tqdm(train_dataloader,ncols=0)):
@@ -187,7 +186,7 @@ def trainer(epoch, model:nn.Module, early_stop=None):
     lr_scher.step(ma_loss)
 
     return ma_loss
-def validation(model):
+def validation(model:nn.Module):
 
     model.eval()
 
@@ -199,6 +198,8 @@ def validation(model):
             a.to(device)
             z_q = model(q)
             z_a = model(a)
+            z_q = top_k_sparse(z_q, config['cluster_config']['k_sparse']).to_dense()
+            z_a = top_k_sparse(z_a, config['cluster_config']['k_sparse']).to_dense()
             querys.append(z_q.to('cpu'))
             embedding.append(z_a.to('cpu'))
 
@@ -229,19 +230,27 @@ if __name__=='__main__':
 
     lex_MAE_retriver=lex_retriever()
     lex_MAE_retriver.to(device)
+    lex_MAE_retriver.train()
 
+    torch.manual_seed(seed)
+    random.seed(seed)
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
     train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True,collate_fn=collect_fn, num_workers=4, persistent_workers=True)
     val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False,collate_fn=collect_fn)
 
 
     checkpoint_path = 'save/LEX_MAE_retriever.pt'
-    load_path = 'save/LEX_MAE_retriever_loss_6.1098.pt'
+    load_path = 'save/LEX_MAE_retriever878.pt'
     if os.path.isfile(load_path):
         lex_MAE_retriver.model.load_state_dict(torch.load(load_path, map_location='cpu')['enc_model_state_dict'])
         print('load weight from',load_path)
     else:
         print('Train from scrach')
+    
+    
+    acc=validation(lex_MAE_retriver)
+    print('acc:',acc)
+    exit()
 
     optimizer = torch.optim.AdamW(lex_MAE_retriver.parameters(), lr=1e-5, weight_decay=1e-2)
     num_epochs=40

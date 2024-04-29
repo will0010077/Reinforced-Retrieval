@@ -2,7 +2,7 @@ import sys
 sys.path.append('../..')
 sys.path.append("app/lib/DocBuilder/")
 from DocBuilder.Retriever_k_means import cluster_builder, doc_retriever
-from DocBuilder.utils import top_k_sparse, inner, unbind_sparse
+from DocBuilder.utils import top_k_sparse, inner, unbind_sparse, Masking, tensor_retuen_type
 from DocBuilder.LexMAE import lex_encoder,lex_decoder, lex_retriever
 import dataset
 import time,datetime
@@ -26,7 +26,6 @@ with open('config.yaml', 'r') as yamlfile:
 seed = config['seed']
 # torch.manual_seed(seed)
 # random.seed(seed)
-
 
 if __name__ == '__main__':
     windows=config['data_config']['windows']
@@ -65,32 +64,17 @@ if __name__ == '__main__':
 
     elif sys.argv[1]=="Train_Retriever":
 
-        def Masking(x,P,all_mask:Tensor=None):
-            x=x.clone()
-            if all_mask is None:
-                all_mask = torch.rand(x.shape, device=x.device) < P
-            else:
-                all_mask = all_mask.bool()+(torch.rand(x.shape, device=x.device) < P)
-                
-            all_mask[:,0], all_mask[:,-1] = 0, 0
-            s = torch.rand(x.shape, device=x.device)
-            mask_mask = (s<0.8) * all_mask
-            rand_mask = ((s>0.8) * (s<0.9)) * all_mask
-            
-            x[mask_mask] = enc.tokenizer.mask_token_id
-            x[rand_mask] = torch.randint(999, enc.tokenizer.vocab_size, size = x[rand_mask].shape, dtype=x.dtype,  device=x.device)
-
-            return x, all_mask.float()
+        
         def collate(batch):
             train_x = torch.stack(batch)
             
             train_x = torch.cat([torch.ones([len(train_x),1], dtype=torch.long)*cls, train_x, torch.ones([len(train_x),1], dtype=torch.long)*eos], dim=1)#(B,256)
 
             targets = train_x
-            bar_x, bar_mask=Masking(train_x, 0.3)
-            tilde_x, tilde_mask=Masking(train_x, 0.3, bar_mask)
+            bar_x = Masking(train_x, 0.3, enc.tokenizer)
+            tilde_x = Masking(train_x, 0.3, enc.tokenizer, bar_x.masks)
             
-            return targets, bar_x, bar_mask, tilde_x, tilde_mask
+            return targets, bar_x, tilde_x
         device='cuda'
         enc=lex_encoder()
         dec=lex_decoder()
@@ -102,15 +86,13 @@ if __name__ == '__main__':
         dec.to(device)
         # Define checkpoint path
         checkpoint_path = 'save/LEX_MAE_retriever.pt'
-        load_path = 'save/LEX_MAE_retriever_loss_5.7730.pt'
+        load_path = 'save/LEX_MAE_retriever_loss_6.0853.pt'
 
             
         if os.path.isfile(load_path):
             checkpoint = torch.load(load_path,map_location='cpu')
             enc.load_state_dict(checkpoint["enc_model_state_dict"])
             dec.load_state_dict(checkpoint["dec_model_state_dict"])
-            # optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-            # start_epoch = checkpoint['epoch'] -1
             best_loss = checkpoint['loss']
             print('load from checkpoint')
         else:
@@ -118,11 +100,16 @@ if __name__ == '__main__':
             start_epoch = 0
             best_loss = 13
 
+        if config['lex']['share_param']:
+            print('share param of enc')
+            dec.model.cls = enc.model.cls
+            dec.model.bert.embeddings = enc.model.bert.embeddings
+        
         optimizer=torch.optim.AdamW(
             params=list(enc.parameters())+list(dec.parameters()),
-            lr=3e-4,
-            betas=config['train_config']['betas'],
-            weight_decay=config['train_config']['weight_decay'])
+            lr=config['lex']['lex_lr'],
+            betas=config['lex']['betas'],
+            weight_decay=config['lex']['weight_decay'])
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
 
         data = dataset.DocumentDatasets('data/segment/segmented_data_', 12)
@@ -130,7 +117,7 @@ if __name__ == '__main__':
         print(data[:4])
         print(enc.tokenizer.batch_decode(data[:4]))
         # small_data=data[:1000].repeat([100,1])
-        dataloader=DataLoader(data, batch_size=128, shuffle=True, num_workers=8, collate_fn=collate)
+        dataloader=DataLoader(data, batch_size=128, shuffle=True, num_workers=1, collate_fn=collate)
 
         # Define checkpoint frequency (e.g., save every 5 epochs)
         checkpoint_freq = 1
@@ -142,14 +129,13 @@ if __name__ == '__main__':
 
             bar = tqdm(dataloader, ncols=0)
             count=0
-            for targets, bar_x, bar_mask, tilde_x, tilde_mask in bar:
+            for targets, bar_x, tilde_x in bar:
                 optimizer.zero_grad()
                 count+=1
-                
-                targets, bar_x, bar_mask, tilde_x, tilde_mask = map(lambda x:x.to(device), [targets, bar_x, bar_mask, tilde_x, tilde_mask])
-                
-                bar_x = {"input_ids": bar_x}
-                tilde_x= {"input_ids": tilde_x}
+                targets, bar_x, tilde_x= map(lambda x:x.to(device), [targets, bar_x, tilde_x])
+                targets:Tensor
+                bar_x:tensor_retuen_type
+                tilde_x:tensor_retuen_type
                 
                 enc_logits, a, b=enc.forward(bar_x)
                 dec_logits=dec.forward(tilde_x, b=b)
@@ -157,17 +143,17 @@ if __name__ == '__main__':
                 # print(targets.shape) #(B, N)
                 enc_loss=-torch.log_softmax(enc_logits, dim=-1)[torch.arange(targets.shape[0])[:,None], torch.arange(targets.shape[1])[None,:], targets] #(B,N)
                 dec_loss=-torch.log_softmax(dec_logits, dim=-1)[torch.arange(targets.shape[0])[:,None], torch.arange(targets.shape[1])[None,:], targets] #(B,N)
-                enc_loss = (enc_loss*bar_mask).sum()/(bar_mask.sum()+1e-4)
-                dec_loss = (dec_loss*tilde_mask).sum()/(tilde_mask.sum()+1e-4)
+                enc_loss = (enc_loss*(1-bar_x.masks)).sum()/((1-bar_x.masks).sum()+1e-4)
+                dec_loss = (dec_loss*(1-tilde_x.masks)).sum()/((1-bar_x.masks).sum()+1e-4)
                 loss = enc_loss+dec_loss
                 loss = loss.mean()
                 loss.backward()
                 optimizer.step()
 
                 enc_pred = enc_logits.max(dim=-1).indices
-                enc_acc=((enc_pred==targets).float()*bar_mask).sum()/(bar_mask.sum())
+                enc_acc=((enc_pred==targets).float()*(1-bar_x.masks)).sum()/((1-bar_x.masks).sum())
                 dec_pred = dec_logits.max(dim=-1).indices
-                dec_acc=((dec_pred==targets).float()*bar_mask).sum()/(bar_mask.sum())
+                dec_acc=((dec_pred==targets).float()*(1-bar_x.masks)).sum()/((1-bar_x.masks).sum())
 
                 bar.set_description_str(f"Loss: {ma_loss:.2f}/{enc_loss:.2f}/{dec_loss:.2f}, Acc:{enc_acc:.2f}/{dec_acc:.2f}  Best Loss: {best_loss:.2f}, Save time: {snow}")
                 if not torch.isnan(loss):
@@ -208,7 +194,7 @@ if __name__ == '__main__':
 
         lex_MAE_retriver=lex_retriever()
         lex_MAE_retriver.to(device)
-        load_path = 'save/LEX_MAE_retriever838.pt'
+        load_path = 'save/LEX_MAE_retriever878.pt'
         lex_MAE_retriver.model.load_state_dict(torch.load(load_path, map_location='cpu')['enc_model_state_dict'])
         print('load weight from',load_path)
         
@@ -224,7 +210,7 @@ if __name__ == '__main__':
         # print(torch.load(f'data/data_reduced_{num_samples}.pt'))
     elif sys.argv[1]=="doc_build":
         cluster_config=config["cluster_config"]
-        data=torch.load('data/vecs_reduced_5000000.pt') ## shape:(N,d)
+        data=torch.load('data/vecs_reduced_10000000.pt') ## shape:(N,d)
         print('converting...')
         data = unbind_sparse(data)
 
@@ -232,7 +218,7 @@ if __name__ == '__main__':
         print(len(data))
         print(data[:2])
         cluster = cluster_builder(k=cluster_config["k"])
-        cluster_ids_x, centers = cluster.train(data, epoch=20, bs = cluster_config['bs'], tol=cluster_config['tol'], lr=cluster_config['lr'])
+        cluster_ids_x, centers = cluster.train(data, epoch=10, bs = cluster_config['bs'], tol=cluster_config['tol'], lr=cluster_config['lr'])
         cluster.build()
         name = cluster.save()
         cluster.load(name)
@@ -269,6 +255,8 @@ if __name__ == '__main__':
         
 
         pass
-        
+    
+    else:
+        raise KeyError()
 
 

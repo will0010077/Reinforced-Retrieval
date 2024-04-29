@@ -70,7 +70,7 @@ def sparse_inner(a:Tensor, b:Tensor):
 def custom_sparse_mmT(a: Tensor, b: Tensor) -> Tensor:
     '''a: sparse vector shape(d)
     b: sparse matrix shape(M,d)
-    output shape (M)
+    output a@b.T with shape (M)
     '''
     # Get indices with values of a
     indices_a = a.indices().squeeze()
@@ -153,7 +153,7 @@ def restore_batched_list(data:list[Tensor]):
 def unbind_sparse(data:Tensor, use_sort=False):
     data = data.coalesce()
     size = data.shape
-    if use_sort:
+    if use_sort:# checked. Should be OK not to use sort
         arg_sort = torch.argsort(data.indices()[0])
         new_indices = data.indices()[:,arg_sort]
         new_values = data.values()[arg_sort]
@@ -165,8 +165,9 @@ def unbind_sparse(data:Tensor, use_sort=False):
     ele, counts = torch.unique(new_indices[0], return_counts=True)
     new_counts = torch.zeros([size[0]], dtype=torch.long)
     new_counts[ele] = counts
-    new_indices = torch.split_with_sizes(new_indices[1], new_counts.tolist())
-    new_values = torch.split_with_sizes(new_values, new_counts.tolist())
+    new_counts = new_counts.tolist()
+    new_indices = torch.split_with_sizes(new_indices[1], new_counts)
+    new_values = torch.split_with_sizes(new_values, new_counts)
     
     bar = tqdm(total = size[0], ncols=0)
     def collate_fn(i, v):
@@ -174,4 +175,41 @@ def unbind_sparse(data:Tensor, use_sort=False):
         return torch.sparse_coo_tensor(i[None,:], v, size=[size[1]])
     
     return [*map(collate_fn, new_indices, new_values)]
+
+
+
+class tensor_retuen_type(dict):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.update({i: v for i, v in enumerate(args)})
+        self.update({**kwargs})
+        
     
+    def to(self, device):
+        return tensor_retuen_type(**{i:self[i].to(device) for i in self})
+    def __getattr__(self, name: str) -> Tensor:
+        return self[name]
+    
+    def __getstate__(self,):
+        return self
+    def __setstate__(self, state):
+        self.update(state)
+        
+    
+
+def Masking(x:Tensor, P:float, tokenizer, all_mask:Tensor=None)->tensor_retuen_type:
+    x=x.clone()
+    if all_mask is None:
+        all_mask = torch.rand(x.shape, device=x.device) > P
+    else:
+        all_mask = all_mask.bool() * (torch.rand(x.shape, device=x.device) > P)
+        
+    all_mask[:,0], all_mask[:,-1] = 1, 1
+    s = torch.rand(x.shape, device=x.device)
+    mask_mask = (s<0.8) * ~all_mask
+    rand_mask = ((s>0.8) * (s<0.9)) * ~all_mask
+    
+    x[mask_mask] = tokenizer.mask_token_id
+    x[rand_mask] = torch.randint(999, tokenizer.vocab_size, size = x[rand_mask].shape, dtype=x.dtype, device=x.device)
+
+    return tensor_retuen_type(input_ids = x, masks = all_mask.long(), attention_masks = generate_mask(x, tokenizer.pad_token_id))

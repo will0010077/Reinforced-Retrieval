@@ -1,72 +1,83 @@
 
 import torch
 from time import time
-from DocBuilder.utils import split_list_to_batch, restore_batched_list, unbind_sparse
+from DocBuilder.utils import split_list_to_batch, restore_batched_list, unbind_sparse, top_k_sparse, token_retuen_type
+
+a = token_retuen_type(input_ids = torch.tensor([1]), attention_masks = torch.tensor([2]))
+print({**a})
+b = token_retuen_type(**a)
+print(b)
+c = b.to('cuda')
+print(c)
+exit(0)
 if __name__=='__main__':
-    a = torch.randn([32,10]).to_sparse()
-    print(a.sparse_dim(), a.dense_dim())
-    a.sparse_resize_([64,10], a.sparse_dim(), a.dense_dim())
-    print(a)
+#     data=torch.load('data/vecs_reduced_5000000.pt') ## shape:(N,d)
+#     print('converting...')
+#     data = unbind_sparse(data)
+#     for i, d in enumerate(data):
+#         if (i==d.indices()).float().mean() != 1.:
+#             print(d)
+#     exit()
+#     a = torch.randn([32,10]).to_sparse()
+#     print(a.sparse_dim(), a.dense_dim())
+#     a.sparse_resize_([64,10], a.sparse_dim(), a.dense_dim())
+#     print(a)
+#     exit()
+    
+#     s=time()    
+    a = torch.load('data/vecs_reduced_10000000.pt',mmap=True)
+    a= top_k_sparse(a, 64)
+    torch.save('data/vecs_reduced_10000000.pt')
     exit()
+#     print(time()-s)
     
-    s=time()    
-    a = torch.load('data/vecs_reduced_5000000.pt',mmap=False)
-    print(time()-s)
+#     print(a[10000])
     
-    print(a[10000])
+#     s=time()
+#     # a = restore_batched_list(a)
+#     a = unbind_sparse(a)
     
-    s=time()
-    # a = restore_batched_list(a)
-    a = unbind_sparse(a)
-    
-    print(time()-s)
-    print(a[10000])
-    exit()
-    s=time()
-    # a = split_list_to_batch(a, bs=32)
-    print(time()-s)
-    s=time()
-    torch.save(a, 'data/vecs_reduced_5000000.pt')
-    print(time()-s)
-    s=time()
-    exit()
+#     print(time()-s)
+#     print(a[10000])
+#     exit()
+#     s=time()
+#     # a = split_list_to_batch(a, bs=32)
+#     print(time()-s)
+#     s=time()
+#     torch.save(a, 'data/vecs_reduced_5000000.pt')
+#     print(time()-s)
+#     s=time()
+#     exit()
 import sys
 from transformers import AutoTokenizer
-from LexMAE import lex_retriever
-def top_k_sparse(x:torch.Tensor, k:int, vec_dim:int=-1):
-    '''
-    x: Tensor
-    vec_dim: data dim, default -1
-    out: sparsed x
-    '''
-    scale=len(x.shape)*2+1
-    if scale>(x.shape[vec_dim]/k):
-        print(f'Warning! Sparsed result larger than original Tensor. scale: {scale}, sparsity: {(x.shape[vec_dim]/k)}')
-    assert k<=x.shape[vec_dim]# check k smaller than original size
-    a, _=x.argsort(dim=vec_dim).split_with_sizes(split_sizes=[x.shape[vec_dim]-k, k], dim=vec_dim) #keep top k index
-    x=x.scatter(dim=vec_dim, index=a, value=0)#other index full with zero
-    x=x.to_sparse(layout=torch.sparse_coo)
-    return x
+from DocBuilder.LexMAE import lex_retriever
+from DocBuilder.utils import top_k_sparse
 
 lex_MAE_retriver=lex_retriever()
 lex_MAE_retriver.to('cpu')
-lex_MAE_retriver.model.load_state_dict(torch.load('app/save/LEX_MAE_retriever838.pt', map_location='cpu')['enc_model_state_dict'])
-k=16
+lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever878.pt', map_location='cpu')['enc_model_state_dict'])
+k=256
 
-example='Breaking Bad is an American crime drama television series created and produced by Vince Gilligan for AMC. Set and filmed in Albuquerque, New Mexico, the series follows Walter White (Bryan Cranston), an underpaid, dispirited high-school chemistry teacher struggling with a recent diagnosis of stage-three lung cancer. White turns to a life of crime and partners with a former student, Jesse Pinkman (Aaron Paul), to produce and distribute methamphetamine to secure his family\'s financial future before he dies, while navigating the dangers of the criminal underworld. Breaking Bad premiered on AMC on January 20, 2008, and concluded on September 29, 2013, after five seasons consisting of 62 episodes.'
-example='Breaking Bad premiered on AMC on January 20, 2008, and concluded on September 29, 2013, after five seasons consisting of 62 episodes.'
+# example='Breaking Bad is an American crime drama television series created and produced by Vince Gilligan for AMC. Set and filmed in Albuquerque, New Mexico, the series follows Walter White (Bryan Cranston), an underpaid, dispirited high-school chemistry teacher struggling with a recent diagnosis of stage-three lung cancer. White turns to a life of crime and partners with a former student, Jesse Pinkman (Aaron Paul), to produce and distribute methamphetamine to secure his family\'s financial future before he dies, while navigating the dangers of the criminal underworld. Breaking Bad premiered on AMC on January 20, 2008, and concluded on September 29, 2013, after five seasons consisting of 62 episodes.'
+example='''Obama's first-term actions addressed the global financial crisis and included a major stimulus package to guide the economy in recovering from the Great Recession, a partial extension of George W. Bush's tax cuts, legislation to reform health care, a major financial regulation reform bill, and the end of a major U.S. military presence in Iraq. Obama also appointed Supreme Court justices Sonia Sotomayor and Elena Kagan, the former being the first Hispanic American on the Supreme Court. He ordered the counterterrorism raid which killed Osama bin Laden and downplayed Bush's counterinsurgency model, expanding air strikes and making extensive use of special forces, while encouraging greater reliance on host-government militaries. Obama also ordered military involvement in Libya in order to implement UN Security Council Resolution 1973, contributing to the overthrow of Muammar Gaddafi.'''
+
+
 tokens = lex_MAE_retriver.tokenizer(example, return_tensors='pt')
 z = lex_MAE_retriver.forward(tokens)
 z = top_k_sparse(z, k)[0]
-for i, v in sorted(zip(lex_MAE_retriver.tokenizer.decode(z.coalesce().indices()[0]).split(' '), z.coalesce().values()), key=lambda x:x[1], reverse=True):
+for i, v in sorted(zip(lex_MAE_retriver.tokenizer.convert_ids_to_tokens(z.coalesce().indices()[0]), z.coalesce().values()), key=lambda x:x[1], reverse=True):
     print(f'{i}:{v:.3f}, ',end='')
 print('=============================================================')
-example='How many seasons does Breaking Bad have?'
+example='''The man played with the child while the dog chased the cat'''
 tokens = lex_MAE_retriver.tokenizer(example, return_tensors='pt')
-z = lex_MAE_retriver.forward(tokens)
+z = lex_MAE_retriver.forward(tokens, output_soft=False)
 z = top_k_sparse(z, k)[0]
-for i, v in sorted(zip(lex_MAE_retriver.tokenizer.decode(z.coalesce().indices()[0]).split(' '), z.coalesce().values()), key=lambda x:x[1], reverse=True):
-    print(f'{i}:{v:.3f}, ',end='')
+count=0
+for i, v in sorted(zip(lex_MAE_retriver.tokenizer.convert_ids_to_tokens(z.coalesce().indices()[0]), z.coalesce().values()), key=lambda x:x[1], reverse=True):
+    print(f'{i:8s}: {v:.2f}, ',end='')
+    count+=1
+    if count%8==0:
+        print()
 
 exit(0)
 
