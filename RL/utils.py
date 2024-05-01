@@ -5,44 +5,28 @@ import torch
 from torch import Tensor, nn
 import math
 from DocBuilder.Retriever_k_means import inner
-from DocBuilder.utils import sparse_retrieve_rep
+from DocBuilder.utils import sparse_retrieve_rep, tensor_retuen_type
 import random
-class transition(nn.Module):
-    def __init__(self, inputs:Tensor, preds:Tensor, ret:Tensor, neg:Tensor, rewards:Tensor):
-        '''
-        inputs : (k,d)
-        pred : (k,d)
-        ret : (k,d)
-        neg : (k,neg,d)
-        rewards : (k) or scalar
-        '''
-        super().__init__()
-        self.register_buffer('inputs', inputs.detach())
-        self.register_buffer('preds', preds.detach())
-        self.register_buffer('ret', ret.detach())
-        self.register_buffer('neg', neg.detach())
-        self.register_buffer('rewards', rewards.detach())
-        self.inputs:Tensor
-        self.preds:Tensor
-        self.ret:Tensor
-        self.neg:Tensor
-        self.rewards:Tensor
+class transition(tensor_retuen_type):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
+    def __getattr__(self, name: str) -> Tensor:
+        if name in self.keys():
+            return self[name]
+        
+        def f(*args, **kwargs):
+            return tensor_retuen_type(**{i:getattr(self[i], name)(*args, **kwargs) for i in self})
+        return f
+    
+    def __getstate__(self,):
+        return self
+    def __setstate__(self, state):
+        self.update(state)
         
     def __str__(self) -> str:
         return f'inputs:{self.inputs.shape}, outputs:{self.preds.shape}, ret:{self.ret.shape}, neg:{self.neg.shape}, rewards:{self.rewards.shape}'
-    def to_sparse(self):
-        self.inputs = self.inputs.to_sparse()
-        self.preds = self.preds.to_sparse()
-        self.ret = self.ret.to_sparse()
-        self.neg = self.neg.to_sparse()
-        return self
-    def to_dense(self):
-        self.inputs = self.inputs.to_dense()
-        self.preds = self.preds.to_dense()
-        self.ret = self.ret.to_dense()
-        self.neg = self.neg.to_dense()
-        return self
+
 
 class doc_buffer:
     def __init__(self, max_len=2**14):
@@ -69,6 +53,7 @@ class doc_buffer:
             index = torch.arange(len(self))
         
         for i in range(0, len(self), bs):
+            yield transition(**{k: self.stack(k, index[i:i+bs]) for k in self.buffer[0]})
             yield transition(self.stack('inputs', index[i:i+bs]), 
                           self.stack('preds', index[i:i+bs]), 
                           self.stack('ret', index[i:i+bs]),

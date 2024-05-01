@@ -17,6 +17,7 @@ from DocBuilder.LexMAE import lex_retriever
 from DocBuilder.utils import top_k_sparse
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 # from contriver import Contriever
@@ -146,13 +147,13 @@ def collect_fn(batch):
     # output_b = torch.cat([torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.cls_token_id, output_b, torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.eos_token_id], dim=1)#(B,256)
     return output_a, output_b
 
-
+F_lambda=0.001
 def trainer(epoch, model:nn.Module, early_stop=None):
+    global F_lambda
     model.train()
-    ma_loss=3.4
+    ma_loss=2
     ma_dis=0
     ma_acc=0.5
-    F_lambda=0.004
     flop_loss=FLOPS()
     count=0
     for q,a in (bar:=tqdm(train_dataloader,ncols=0)):
@@ -183,6 +184,11 @@ def trainer(epoch, model:nn.Module, early_stop=None):
         ma_dis = 0.99*ma_dis + 0.01*dis
         bar.set_description(f'epoch[{epoch+1:3d}/{num_epochs}]|Training')
         bar.set_postfix_str(f'loss: {ma_loss:.4f}, dis: {ma_dis:.2f}, acc: {ma_acc:.4f}')
+        if count>1000 and ma_acc<0.2:
+            model.model.load_state_dict(torch.load(load_path, map_location='cpu')['enc_model_state_dict'])
+            F_lambda = F_lambda/1.5
+            print('lambda',F_lambda)
+            return trainer(epoch, model, early_stop)
     lr_scher.step(ma_loss)
 
     return ma_loss
@@ -235,12 +241,12 @@ if __name__=='__main__':
     torch.manual_seed(seed)
     random.seed(seed)
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-    train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True,collate_fn=collect_fn, num_workers=4, persistent_workers=True)
+    train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True,collate_fn=collect_fn, num_workers=6, persistent_workers=True)
     val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False,collate_fn=collect_fn)
 
 
     checkpoint_path = 'save/LEX_MAE_retriever.pt'
-    load_path = 'save/LEX_MAE_retriever878.pt'
+    load_path = 'save/LEX_MAE_retriever_loss_6.8032.pt'
     if os.path.isfile(load_path):
         lex_MAE_retriver.model.load_state_dict(torch.load(load_path, map_location='cpu')['enc_model_state_dict'])
         print('load weight from',load_path)
@@ -248,14 +254,12 @@ if __name__=='__main__':
         print('Train from scrach')
     
     
-    acc=validation(lex_MAE_retriver)
-    print('acc:',acc)
-    exit()
 
-    optimizer = torch.optim.AdamW(lex_MAE_retriver.parameters(), lr=1e-5, weight_decay=1e-2)
+    optimizer = torch.optim.AdamW(lex_MAE_retriver.parameters(), 
+                lr=config['lex']['fine_lr'])
     num_epochs=40
     lr_scher=torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20, cooldown=20, min_lr=1e-5)
-    bestacc=0.80
+    bestacc=0.85
     for i in range(num_epochs):
         loss=trainer(i, lex_MAE_retriver, early_stop=2000)
         acc=validation(lex_MAE_retriver)

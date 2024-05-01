@@ -180,15 +180,15 @@ def unbind_sparse(data:Tensor, use_sort=False):
 
 class tensor_retuen_type(dict):
     def __init__(self, *args, **kwargs):
-        super().__init__()
-        self.update({i: v for i, v in enumerate(args)})
-        self.update({**kwargs})
+        super().__init__(*args, **kwargs)
         
-    
-    def to(self, device):
-        return tensor_retuen_type(**{i:self[i].to(device) for i in self})
     def __getattr__(self, name: str) -> Tensor:
-        return self[name]
+        if name in self.keys():
+            return self[name]
+        
+        def f(*args, **kwargs):
+            return tensor_retuen_type(**{i:getattr(self[i], name)(*args, **kwargs) for i in self})
+        return f
     
     def __getstate__(self,):
         return self

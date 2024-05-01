@@ -86,7 +86,7 @@ if __name__ == '__main__':
         dec.to(device)
         # Define checkpoint path
         checkpoint_path = 'save/LEX_MAE_retriever.pt'
-        load_path = 'save/LEX_MAE_retriever_loss_6.0853.pt'
+        load_path = 'save/LEX_MAE_retriever_loss_7.1591.pt'
 
             
         if os.path.isfile(load_path):
@@ -106,18 +106,18 @@ if __name__ == '__main__':
             dec.model.bert.embeddings = enc.model.bert.embeddings
         
         optimizer=torch.optim.AdamW(
-            params=list(enc.parameters())+list(dec.parameters()),
-            lr=config['lex']['lex_lr'],
-            betas=config['lex']['betas'],
-            weight_decay=config['lex']['weight_decay'])
+                params=list(enc.parameters())+list(dec.parameters()),
+                lr=config['lex']['pre_lr'],
+                betas=config['lex']['betas'],
+                weight_decay=config['lex']['weight_decay'])
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
 
         data = dataset.DocumentDatasets('data/segment/segmented_data_', 12)
-        print(data.shape)
-        print(data[:4])
-        print(enc.tokenizer.batch_decode(data[:4]))
+        # print(data.shape)
+        # print(data[:4])
+        # print(enc.tokenizer.batch_decode(data[:4]))
         # small_data=data[:1000].repeat([100,1])
-        dataloader=DataLoader(data, batch_size=128, shuffle=True, num_workers=1, collate_fn=collate)
+        dataloader=DataLoader(data, batch_size=128, shuffle=True, num_workers=12, collate_fn=collate)
 
         # Define checkpoint frequency (e.g., save every 5 epochs)
         checkpoint_freq = 1
@@ -194,7 +194,7 @@ if __name__ == '__main__':
 
         lex_MAE_retriver=lex_retriever()
         lex_MAE_retriver.to(device)
-        load_path = 'save/LEX_MAE_retriever878.pt'
+        load_path = 'save/LEX_MAE_retriever895.pt'
         lex_MAE_retriver.model.load_state_dict(torch.load(load_path, map_location='cpu')['enc_model_state_dict'])
         print('load weight from',load_path)
         

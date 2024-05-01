@@ -1,11 +1,11 @@
 
 import torch
 from time import time
-from DocBuilder.utils import split_list_to_batch, restore_batched_list, unbind_sparse, top_k_sparse, token_retuen_type
+from DocBuilder.utils import split_list_to_batch, restore_batched_list, unbind_sparse, top_k_sparse, tensor_retuen_type
 
-a = token_retuen_type(input_ids = torch.tensor([1]), attention_masks = torch.tensor([2]))
-print({**a})
-b = token_retuen_type(**a)
+a = tensor_retuen_type(input_ids = torch.tensor([1]), attention_masks = torch.tensor([2]))
+a = a.to('cuda')
+b = tensor_retuen_type(**a)
 print(b)
 c = b.to('cuda')
 print(c)
