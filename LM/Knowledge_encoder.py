@@ -3,61 +3,66 @@ sys.path.append("../../")
 
 # Load model directly
 import torch
-from torch import nn
-from transformers import AutoTokenizer, AutoModel
+
+from torch import nn, Tensor
+from transformers import AutoTokenizer, AutoModel, BertConfig, BertModel
 import yaml
-with open('app/lib/config.yaml', 'r') as yamlfile:
+
+with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 config = config['model_config']
 
 class KnowEncoder(torch.nn.Module):
-    def __init__(self, num_layers=40, num_heads=40, dims=128, groups=4):
+    def __init__(self, num_layers=40, num_heads=40, dims=128, groups=4, num_prefix = 4):
         super().__init__()
         if dims % groups !=0:
             raise ValueError(f'Dims must divided by groups')
-        self.model = AutoModel.from_pretrained("facebook/contriever")
-        self.tokenizer = AutoTokenizer.from_pretrained("facebook/contriever")
+        
+        self.model = BertModel(BertConfig(num_hidden_layers=4, intermediate_size=2048))
+        self.tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
         self.num_layers=num_layers
         self.num_heads=num_heads
         self.dims=dims
-        self.encoder_heads=nn.Conv1d(config['embed_dim']*self.num_layers*2, self.num_heads*self.dims*self.num_layers*2, kernel_size=1, groups=groups*self.num_layers*2)
-    
-    def forward(self, x, k=0, dtype=torch.float32)->tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
-        # print(len(x))
-        # if k==0:
-        #     k=len(x)
-        # assert len(x)%k==0
-        # print(type(x))
-        if type(x)==str:
+        self.encoder_heads=nn.Conv1d(config['embed_dim']*self.num_layers, self.num_heads*self.dims*self.num_layers, kernel_size=1, groups=groups*self.num_layers)
+        
+        assert num_prefix<99
+        self.num_prefix = num_prefix
+        self.register_buffer('prefix_tokens', torch.arange(2, 2+self.num_prefix).unsqueeze_(0))#(1,P)
+        self.prefix_tokens:Tensor
+    def forward(self, x, k=0, dtype=torch.float32)->tuple[torch.Tensor, torch.Tensor]:
+        '''
+        x: (B*k, n)
+        '''
+        if type(x)==list:
             x=self.tokenizer(x, return_tensors='pt', padding=True ,truncation=True).to(self.model.device)
-        y=self.model(input_ids = x.get('input_ids',None), attention_mask = x.get('attention_mask',None))
-        B=y[0].shape[0]//k
-        n=y[0].shape[1]
-        pooler_output=self.mean_pooling( y[0], x['attention_mask'])
-        y = torch.tile(y[0],[1,1,self.num_layers*2])#(B*k,n,768*40*2)
-        y = y.transpose(1,2)#(B*k,768*40,n)
-        y = self.encoder_heads(y)#(B*k,5120*40,n)
-        y=y.to(dtype)
-        y = y.reshape([B, k, self.num_layers, 2, self.dims, self.num_heads, n])
-        y = y.permute([0,1,2,3,5,6,4])#(B, k, 40, 2, 40, n, 128)
-
-        #concat k to n
-        batch=[]
-        masks=[]
-        for i in range(B):
-            cat=[]
-            for j in range(k):
-                masked_feature = y[i,j,...,:x['attention_mask'][i*k+j].sum(dim=0),:]
-                cat.append(masked_feature)
-            cat = torch.cat(cat, dim=-2)#(40, 2, 40, n*k, 128)
-            cat = cat.permute(3,0,1,2,4)#(n*k, 40, 2, 40, 128)
-            batch.append(cat)
-            masks.append(torch.ones([cat.shape[0]], dtype=torch.long, device=cat.device))
-        masks = nn.utils.rnn.pad_sequence(masks, batch_first=True)#(B, n*k)
-        batch = nn.utils.rnn.pad_sequence(batch, batch_first=True)#(B, n*k, 40, 2, 40, 128)
-        batch = batch.permute(2,3,0,4,1,5)#(40, 2, B, 40, n*k, 128)
-
-        return pooler_output.to(dtype), batch, masks
+        
+        B=x.input_ids.shape[0]//k
+        n=x.input_ids.shape[1]
+        x.input_ids = torch.cat([self.prefix_tokens.tile([B*k,1]), x.input_ids], dim = 1)
+        x.attention_mask = torch.cat([torch.ones([B*k, self.num_prefix], device = x.input_ids.device), x.attention_mask], dim = 1)
+        x = {'input_ids':x.input_ids, 'attention_mask':x.attention_mask}
+        y=self.model(**x)
+        
+        
+        y = y.last_hidden_state[:,:self.num_prefix,:]
+        pooler_output = y.mean(dim=1)
+        y = torch.tile(y,[1,1,self.num_layers])#(B*k, P, in*layer)
+        y = y.transpose(1,2)#(B*k, in*layer, P)
+        y = self.encoder_heads.forward(y)#(B*k, 5120*layer, P)
+        # print('encoder_heads output:', y.shape)
+        y = y.to(dtype)
+        y = y.reshape([B, k, self.num_layers, 1, self.dims, self.num_heads, self.num_prefix])
+        # print('prefix output:', y.shape)
+        
+        
+        y = y.permute([2,3,0,5,1,6,4])#(layer, 1, B, head, k, P, dims)
+        # print('before cat output:', y.shape)
+        y = y.reshape([self.num_layers, 1, B, self.num_heads, k*self.num_prefix, self.dims])#(layer, 1, B, head, k*P, dims)
+        batch = torch.tile(y, [1,2,1,1,1,1])#(layer, 2, B, head, k*P, dims)
+        # print('after cat output:', batch.shape)
+        masks = torch.ones([B, k*self.num_prefix], dtype=torch.long, device=y.device)
+        return batch.unbind(), masks
+    
     def mean_pooling(self,token_embeddings, mask):
         token_embeddings = token_embeddings.masked_fill(~mask[..., None].bool(), 0.)
         sentence_embeddings = token_embeddings.sum(dim=1) / mask.sum(dim=1)[..., None]
@@ -65,4 +70,6 @@ class KnowEncoder(torch.nn.Module):
 
 if __name__=='__main__':
     model=KnowEncoder()
+    # prefix, prefix_masks = model.forward(['hello'], k = 1, dtype=torch.float16)
+    output = model.forward(['hello 1','hello 2','hello 3','hello 4','hello 5','hello 6'], 3)
     

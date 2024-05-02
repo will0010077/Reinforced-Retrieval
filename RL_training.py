@@ -6,8 +6,9 @@ from tqdm import tqdm
 from RL.utils import *
 from DocBuilder.Retriever_k_means import cluster_builder, doc_retriever
 from DocBuilder.LexMAE import lex_retriever
-from DocBuilder.utils import restore_batched_list
+from DocBuilder.utils import restore_batched_list, generate_mask
 from LM.llama_reader import LLaMa_reader
+from LM.Knowledge_encoder import KnowEncoder
 from fintune_contriver import NQADataset
 import yaml
 
@@ -39,7 +40,7 @@ def templete(doc_list:list[str], query:str, answer:str)->tuple[str]:
     Please answer user questions based on the above knowledge\n<</SYS>>
     \n [INST] User:{query.strip()} [/INST] Assistant:'''
     return prompt, prompt + answer
-def prepare_QA_token(tokenizer, doc:list[str], texts:list[str], targets:list[str]):
+def prepare_QA_token(tokenizer, doc:list[list[str]], texts:list[str], targets:list[str]):
     '''
     
     '''
@@ -56,19 +57,7 @@ def prepare_QA_token(tokenizer, doc:list[str], texts:list[str], targets:list[str
 
 if __name__=="__main__":
     device='cuda'
-    # init retriever
-
-    cluster_config=config["cluster_config"]
-    cluster = cluster_builder(k=cluster_config["k"])
-    cluster.load('04_23_04_32')
-
-    lex_MAE_retriver=lex_retriever()
-    lex_MAE_retriver.to('cpu')
-    lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever838.pt', map_location='cpu')['enc_model_state_dict'])
-
-    data=torch.load('data/data_reduced_5000000.pt') ## shape:(N,d)
-    retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
-    retriever.to(device)
+    
 
     # pre compute embbeding
 
@@ -76,7 +65,17 @@ if __name__=="__main__":
     # init module
     # encoder:torch.Module
     LM =LLaMa_reader("MediaTek-Research/Breeze-7B-Instruct-v0_1")
-
+    num_heads = LM.model.config.num_key_value_heads
+    num_layers = LM.model.config.num_hidden_layers
+    num_dims = LM.model.config.hidden_size//LM.model.config.num_attention_heads
+    print(LM.model.config)
+    Encoder=KnowEncoder(num_layers, num_heads, num_dims, config['train_config']['head'])
+    Encoder.to(device)
+    
+    prefix, prefix_masks = Encoder.forward(['hello'], k = 1, dtype=torch.float16)
+    tokens = LM.tokenizer(['world'], return_tensors='pt').to(device)
+    LM.forward(**tokens, encoder_output=prefix, encoder_masks=prefix_masks)
+    
     # init agent
     policy = Transformer_Agent(in_dim = 30522, num_heads=6, num_layers=4, pos_dim=128)
     policy.to(device)
@@ -84,6 +83,20 @@ if __name__=="__main__":
     optim = torch.optim.AdamW(policy.parameters(), lr = config['train_config']['agent_lr'])
     replay = doc_buffer(max_len=2**10)
 
+# init retriever
+    cluster_config=config["cluster_config"]
+    cluster = cluster_builder(k=cluster_config["k"])
+    cluster.load('05_02_19_08')
+
+    lex_MAE_retriver=lex_retriever()
+    lex_MAE_retriver.to('cpu')
+    lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever895.pt', map_location='cpu')['enc_model_state_dict'])
+
+    data=torch.load('data/data_reduced_1000000.pt') ## shape:(N,d)
+    retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
+    retriever.to(device)
+    
+    
     max_epoch = 10
     num_retrieve=4
     num_neg=32
@@ -97,10 +110,12 @@ if __name__=="__main__":
     ma_loss=10
     ma_reward=-2
     iter=0
+    
     for epoch in range(max_epoch):
         train_bar=tqdm(loader, ncols=0)
         stream = torch.cuda.current_stream()
         for q, target in train_bar:
+            B = len(q)
             iter+=1
             ret = retriever.forward(q)[:,None,:]# (B,1,d)
             outputs = ret
@@ -123,29 +138,34 @@ if __name__=="__main__":
                     ret = torch.cat([ret, sel_z.to(ret.device, non_blocking=True)], dim = 1)
                     outputs = torch.cat([outputs, qt[:,None,:]], dim = 1)
                     
-            doc_set = torch.cat(doc_set, dim=1)
+            doc_set = torch.cat(doc_set, dim=1)#(B, 5, 256)
+            doc_set = doc_set.reshape([-1, doc_set.shape[-1]])#(B*k, 256)
+            
             neg_set = torch.stack(neg_set, dim=1) #(B, 5, neg, 256)
             # print(ret.shape, outputs.shape, doc_set.shape)#torch.Size([8, #ret+1, 30522]) torch.Size([8, #ret+1, 30522]) torch.Size([8, #ret, 256])
-            doc = [retriever.tokenizer.batch_decode(doc_set[i]) for i in range(len(doc_set))]
+            # doc = [retriever.tokenizer.batch_decode(doc_set[i]) for i in range(len(doc_set))]
 
-            
-            
-            
+            mask = generate_mask(doc_set, Encoder.tokenizer.pad_token_id)
+            doc_set=tensor_retuen_type(input_ids = doc_set, attention_mask = mask).to(device)
+            prefix, prefix_masks = Encoder.forward(doc_set, k = num_retrieve, dtype=torch.float16)
             # !!!forward, loss and reward!!!
-            tokens = prepare_QA_token(LM.tokenizer, doc, q, target)
+            tokens = prepare_QA_token(LM.tokenizer, [[]]*B, q, target)
             labels = tokens['labels']
             train_bar.set_postfix_str(f'len: {tokens.input_ids.shape[-1]}')
             # tokens['labels'] = None
-            with torch.no_grad():
-                y, loss = LM.forward(**tokens)
-                del y
+            y, loss = LM.forward(**tokens, encoder_output=prefix, encoder_masks=prefix_masks)
+            del y
+            prefix.retain_grad()
+            
+            loss.backward()
+            print(prefix.grad)
             # reward=torch.ones([len(q)])
             reward = -loss# temperaly, (B)
             # update replay buffer
             for i in range(len(q)):
                 if torch.isnan(reward[i]):
                     continue
-                t = transition(ret[i,:-1], outputs[i,1:], ret[i,1:], neg_set[i], reward[i]).to_sparse()
+                t = transition(inputs=ret[i,:-1], outputs = outputs[i,1:],ret = ret[i,1:], neg = neg_set[i], rewards = reward[i]).to_sparse()
                 t.to('cpu', non_blocking=True)
                 replay.append(t)
             

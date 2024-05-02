@@ -9,6 +9,13 @@ from DocBuilder.utils import sparse_retrieve_rep, tensor_retuen_type
 import random
 class transition(tensor_retuen_type):
     def __init__(self, *args, **kwargs):
+        '''
+        inputs
+        outputs
+        ret
+        neg
+        rewards
+        '''
         super().__init__(*args, **kwargs)
         
     def __getattr__(self, name: str) -> Tensor:

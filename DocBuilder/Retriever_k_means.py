@@ -26,12 +26,13 @@ device='cuda' if torch.cuda.is_available() else 'cpu'
 # device='cpu'
 
 class cluster_builder:
-    def __init__(self, k = 3000, sparse_dim=128):
+    def __init__(self, data = None, k = 3000, sparse_dim=128):
         self.centers = None
         self.idx = None
         self.dim = None
         self.k = int(k)
         self.sparse_dim = sparse_dim
+        self.data = None
     def get_mu(self, x:Tensor, r:Tensor, mu:Tensor, lr:float):
         '''x: (n, c), r: (n), mu: (k, c), a: in [0,1]'''
         u = [x[r==i].mean(dim=0) for i in range(self.k)]
@@ -39,7 +40,7 @@ class cluster_builder:
         u = u*lr + mu*(1-lr)
         u = top_k_sparse(u, 256).to_dense()
 
-        dis=(u-mu).norm(dim=-1).mean()
+        dis=(u-mu).norm(dim=-1).max()
 
         return u, dis
 
@@ -65,9 +66,11 @@ class cluster_builder:
         # try this https://arxiv.org/abs/1507.05910
         self.data = data
         self.size = [len(data), len(data[0])]
-        loader = DataLoader(self.data, batch_size=bs, shuffle=True, collate_fn=collate_list_to_tensor, num_workers=4, persistent_workers=True)
+        loader = DataLoader(self.data, batch_size=bs, shuffle=True, collate_fn=collate_list_to_tensor, num_workers=1, persistent_workers=True)
 
         mu = self.select_init_mu(self.data, self.k).to(device)
+        count_new= 0
+        count=[1]
         for _ in range(epoch):
             bar=  tqdm(loader, ncols = 0)
             for data in bar:
@@ -77,14 +80,15 @@ class cluster_builder:
                 data[-self.k:] = mu
                 dis=float('inf')
                 it=0
-                while dis>tol and it<100:
+                while dis>tol and it<10:
                     it+=1
                     # data[-self.k:, :]=mu
                     r = self.get_r(data, mu)
                     mu, dis = self.get_mu(data, r, mu, lr)
+                    bar.set_description_str(f'dist:{dis:.4f}, max/min: {max(count)/min(count):.1f}')
+                if count_new<500:
                     ele, count = r.unique(return_counts = True)
                     mu[ele[count.argmin()]] = mu[ele[count.argmax()]]+0.001*torch.randn([self.size[1]], device=mu.device)
-                    bar.set_description_str(f'dist:{dis:.4f}, max/min: {max(count)/min(count):.1f}')
             del data, r
         del loader
         

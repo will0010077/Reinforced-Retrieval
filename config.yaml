@@ -32,7 +32,7 @@ cluster_config:
   k: 3000
   bs: 100000
   lr: 0.1
-  tol: 1
+  tol: 0.15
   num_search: 4
   k_sparse: 64
 

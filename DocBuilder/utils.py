@@ -150,31 +150,38 @@ def restore_batched_list(data:list[Tensor]):
         new_data.extend(data.pop(0))
     return new_data
 
-def unbind_sparse(data:Tensor, use_sort=False):
-    data = data.coalesce()
-    size = data.shape
-    if use_sort:# checked. Should be OK not to use sort
-        arg_sort = torch.argsort(data.indices()[0])
-        new_indices = data.indices()[:,arg_sort]
-        new_values = data.values()[arg_sort]
-    else:
-        new_indices = data.indices()
-        new_values = data.values()
+
+class unbind_sparse:
+    def __init__(self, data:Tensor):
+        self.data = data
+    def run(self, use_sort=False):
+        '''
+        2D sparse tensor -> list[1D sparse tensor]
+        '''
+        self.data = self.data.coalesce()
+        size = self.data.shape
+        if use_sort:# checked. Should be OK not to use sort
+            arg_sort = torch.argsort(self.data.indices()[0])
+            new_indices = self.data.indices()[:,arg_sort]
+            new_values = self.data.values()[arg_sort]
+        else:
+            new_indices = self.data.indices()
+            new_values = self.data.values()
+        del self.data
         
-    del data
-    ele, counts = torch.unique(new_indices[0], return_counts=True)
-    new_counts = torch.zeros([size[0]], dtype=torch.long)
-    new_counts[ele] = counts
-    new_counts = new_counts.tolist()
-    new_indices = torch.split_with_sizes(new_indices[1], new_counts)
-    new_values = torch.split_with_sizes(new_values, new_counts)
-    
-    bar = tqdm(total = size[0], ncols=0)
-    def collate_fn(i, v):
-        bar.update()
-        return torch.sparse_coo_tensor(i[None,:], v, size=[size[1]])
-    
-    return [*map(collate_fn, new_indices, new_values)]
+        ele, counts = torch.unique(new_indices[0], return_counts=True)
+        new_counts = torch.zeros([size[0]], dtype=torch.long)
+        new_counts[ele] = counts
+        new_counts = new_counts.tolist()
+        new_indices = torch.split_with_sizes(new_indices[1], new_counts)
+        new_values = torch.split_with_sizes(new_values, new_counts)
+        
+        bar = tqdm(total = size[0], ncols=0)
+        def collate_fn(i, v):
+            bar.update()
+            return torch.sparse_coo_tensor(i[None,:], v, size=[size[1]])
+        
+        return [*map(collate_fn, new_indices, new_values)]
 
 
 

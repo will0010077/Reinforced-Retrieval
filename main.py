@@ -210,15 +210,19 @@ if __name__ == '__main__':
         # print(torch.load(f'data/data_reduced_{num_samples}.pt'))
     elif sys.argv[1]=="doc_build":
         cluster_config=config["cluster_config"]
-        data=torch.load('data/vecs_reduced_10000000.pt') ## shape:(N,d)
+        data=torch.load('data/vecs_reduced_1000000.pt',mmap=True) ## shape:(N,d)
         print('converting...')
-        data = unbind_sparse(data)
+        runer = unbind_sparse(data)
+        del data
+        data = runer.run()
+        del runer
 
         ## Train
         print(len(data))
         print(data[:2])
         cluster = cluster_builder(k=cluster_config["k"])
         cluster_ids_x, centers = cluster.train(data, epoch=10, bs = cluster_config['bs'], tol=cluster_config['tol'], lr=cluster_config['lr'])
+        del data
         cluster.build()
         name = cluster.save()
         cluster.load(name)

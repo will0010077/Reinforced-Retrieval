@@ -70,11 +70,11 @@ class LLaMa_reader:
         #     # use_cache=True,
         #     # trainable=True,
         #     )
-        self.model=AutoModelForCausalLM.from_pretrained(model_dir, token='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', device_map='cpu', torch_dtype=torch.float16)
+        self.model=AutoModelForCausalLM.from_pretrained(model_dir, token='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', device_map='cuda',use_cache=True, torch_dtype=torch.float16)
         # print(self.model)
         self.model.to(device)
         self.model.prepare_inputs_for_generation = prepare_inputs_for_generation
-        self.model.training=True
+        self.model.training=False
         self.model.requires_grad_(False)
         # for p in self.model.parameters():
         #     p.requires_grad_(False)
@@ -92,15 +92,10 @@ class LLaMa_reader:
 
         #concat document mask
         if encoder_masks is not None:
-            if kwargs.get('attention_mask', None) is None:
-                masks = torch.ones_like(kwargs['input_ids'], dtype = torch.long, device=encoder_masks.device)
+            masks =  kwargs.get('attention_mask', torch.ones_like(kwargs['input_ids'], dtype = torch.long, device=encoder_masks.device))
             kwargs['attention_mask'] = torch.cat([encoder_masks, masks.to(encoder_masks.device)],dim=-1)
 
-        if kwargs.get('labels', None) is not None:
-            labels = kwargs['labels']
-            kwargs['labels'] = None
-        else:
-            labels=None
+        labels = kwargs.get('labels', None)
             
         position_ids = torch.arange(kwargs['input_ids'].shape[1]).tile([kwargs['input_ids'].shape[0],1])
         output = self.model(**kwargs,
@@ -121,7 +116,8 @@ class LLaMa_reader:
             loss = loss.masked_fill_(mask, 0)
             loss = loss.sum(-1)/(~mask).sum(-1)
         
-        return lm_logits, loss
+            return lm_logits, loss
+        return lm_logits
 
     @torch.inference_mode()
     def generate(self, message, encoder_output = None, encoder_masks=None, max_new_tokens = 1024, test=False, streamer=True):
