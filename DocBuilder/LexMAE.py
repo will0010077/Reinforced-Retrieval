@@ -56,7 +56,6 @@ class lex_decoder(torch.nn.Module):
         # Initializing a BERT google-bert/bert-base-uncased style configuration
         configuration = BertConfig()
         configuration.num_hidden_layers=2
-        configuration.is_decoder=False
         # print(configuration)
         # Initializing a model (with random weights) from the google-bert/bert-base-uncased style configuration
         self.tokenizer = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")

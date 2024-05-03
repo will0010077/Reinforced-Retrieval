@@ -11,7 +11,7 @@ class transition(tensor_retuen_type):
     def __init__(self, *args, **kwargs):
         '''
         inputs
-        outputs
+        preds
         ret
         neg
         rewards
@@ -32,7 +32,7 @@ class transition(tensor_retuen_type):
         self.update(state)
         
     def __str__(self) -> str:
-        return f'inputs:{self.inputs.shape}, outputs:{self.preds.shape}, ret:{self.ret.shape}, neg:{self.neg.shape}, rewards:{self.rewards.shape}'
+        return f'inputs:{self.inputs.shape}, preds:{self.preds.shape}, ret:{self.ret.shape}, neg:{self.neg.shape}, rewards:{self.rewards.shape}'
 
 
 class doc_buffer:
@@ -50,7 +50,7 @@ class doc_buffer:
     
     def stack(self, name, s:Tensor = None):
         if s is not None:
-            return torch.stack([getattr(self.buffer[i], name) for i in s])
+            return torch.stack([self.buffer[i][name] for i in s])
         return torch.stack([getattr(x, name) for x in self.buffer])
     
     def sample(self, bs, shuffle = False):
@@ -61,11 +61,7 @@ class doc_buffer:
         
         for i in range(0, len(self), bs):
             yield transition(**{k: self.stack(k, index[i:i+bs]) for k in self.buffer[0]})
-            yield transition(self.stack('inputs', index[i:i+bs]), 
-                          self.stack('preds', index[i:i+bs]), 
-                          self.stack('ret', index[i:i+bs]),
-                          self.stack('neg', index[i:i+bs]),
-                          self.stack('rewards', index[i:i+bs]))
+
         
     def __len__(self,):
         return len(self.buffer)
@@ -75,7 +71,7 @@ class doc_buffer:
 
 class PositionalEncoding(nn.Module):
 
-    def __init__(self, d_model: int, dropout: float = 0., max_len: int = 5000, scale=0.1):
+    def __init__(self, d_model: int, dropout: float = 0., max_len: int = 5000, scale=1):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
@@ -93,23 +89,24 @@ class PositionalEncoding(nn.Module):
         Arguments:
             x: Tensor, shape ``[batch_size, seq_len, embedding_dim]``
         """
-        x = torch.cat([x, self.pe[:,:x.size(1)].tile(x.shape[0],1,1)], dim = -1)
+        x = x+ self.pe[:,:x.size(1)]
         return self.dropout(x)
     
 class perturb_model(nn.Module):
     
-    def __init__(self, in_dim=768, dim=768, num_heads=4, num_layers=2, dropout=0.1, pos_dim = 64):
+    def __init__(self, in_dim=768, dim=768, num_heads=4, num_layers=2, dropout=0.1):
         super().__init__()
         self.layer = torch.nn.TransformerEncoderLayer(d_model=dim, nhead=num_heads, dim_feedforward=dim, dropout=dropout,batch_first=True)
         self.model=torch.nn.TransformerEncoder(self.layer, num_layers)
         # self.model = torch.nn.ModuleList([torch.nn.MultiheadAttention(dim, num_heads, batch_first=True) for _ in range(num_layers)])
         self.lam = torch.nn.Parameter(torch.tensor(-10,dtype=torch.float))
-        self.pos_encoder = PositionalEncoding(pos_dim, dropout=dropout, max_len=16, scale=0.1)
+        self.pos_encoder = PositionalEncoding(dim, dropout=dropout, max_len=16)
         self.dim=dim
         self.in_dim=in_dim
         
-        self.scale1=torch.nn.Linear(in_dim + pos_dim, dim, bias=True)
+        self.scale1=torch.nn.Linear(in_dim, dim, bias=True)
         self.scale2=torch.nn.Linear(dim, in_dim, bias=True)
+        torch.nn.init.zeros_(self.scale2.weight.data)
         self.value = torch.nn.Linear(dim, 1)
                     
     def forward(self, x:torch.Tensor, mask=None)->Tensor:
@@ -118,8 +115,8 @@ class perturb_model(nn.Module):
         mask: (n,n)
         out: shape of x
         '''
-        x = self.pos_encoder(x)
         x = self.scale1(x)
+        x = self.pos_encoder(x)
         
         if mask is None:
             mask = torch.nn.Transformer.generate_square_subsequent_mask(x.shape[1], x.device)
@@ -131,13 +128,13 @@ class perturb_model(nn.Module):
     
     
 class Transformer_Agent(nn.Module):
-    def __init__(self,in_dim, dim=768, **kwargs):
+    def __init__(self, in_dim, dim=768, **kwargs):
         super().__init__()
         self.model = perturb_model(in_dim, dim, **kwargs)
-        self.lam = nn.Parameter(torch.ones(1)*-5, True)
+        self.lam = nn.Parameter(torch.ones(1)*-3, True)
     def forward(self, x):
         y, v=self.model.forward(x)
-        return self.lam.exp()*sparse_retrieve_rep(y)+x, v
+        return sparse_retrieve_rep(y)+x, v
     
     @torch.no_grad()
     def next(self, x:torch.Tensor):

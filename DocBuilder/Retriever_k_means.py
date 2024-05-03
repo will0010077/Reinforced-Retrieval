@@ -263,6 +263,7 @@ class doc_retriever(torch.nn.Module):
         self.tokenizer = model.tokenizer
         self.model=model
         self.model.eval()
+        self.model.requires_grad_(False)
         self.data= data
         self.cluster = cluster
         self.ref = torch.nn.Parameter(torch.zeros(1))

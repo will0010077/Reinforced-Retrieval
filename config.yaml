@@ -2,14 +2,15 @@ train_config:
   max_epoch : 6
   spilt : 0.95
   num_samples : null
-  enc_lr : 5.e-5
+  enc_lr : 1.e-5
   lm_lr : 1.e-5
-  agent_lr : 3.e-4
+  agent_lr : 5.e-5
   betas: [0.8, 0.998]
   weight_decay : 0.01
   topk : 1
   head : 2
   load_E : True
+  use_prefix : True
 
 lex:
   pre_lr : 5.e-5

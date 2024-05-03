@@ -210,7 +210,7 @@ if __name__ == '__main__':
         # print(torch.load(f'data/data_reduced_{num_samples}.pt'))
     elif sys.argv[1]=="doc_build":
         cluster_config=config["cluster_config"]
-        data=torch.load('data/vecs_reduced_1000000.pt',mmap=True) ## shape:(N,d)
+        data=torch.load('data/vecs_reduced_100000.pt',mmap=True) ## shape:(N,d)
         print('converting...')
         runer = unbind_sparse(data)
         del data

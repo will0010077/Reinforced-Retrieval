@@ -18,7 +18,7 @@ class KnowEncoder(torch.nn.Module):
         if dims % groups !=0:
             raise ValueError(f'Dims must divided by groups')
         
-        self.model = BertModel(BertConfig(num_hidden_layers=4, intermediate_size=2048))
+        self.model = BertModel(BertConfig(num_hidden_layers=2))
         self.tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
         self.num_layers=num_layers
         self.num_heads=num_heads
@@ -32,6 +32,7 @@ class KnowEncoder(torch.nn.Module):
     def forward(self, x, k=0, dtype=torch.float32)->tuple[torch.Tensor, torch.Tensor]:
         '''
         x: (B*k, n)
+        output: list[(2, B, head, k*P, dims)]*layer , [B, k*P]
         '''
         if type(x)==list:
             x=self.tokenizer(x, return_tensors='pt', padding=True ,truncation=True).to(self.model.device)

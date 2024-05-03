@@ -201,6 +201,8 @@ class tensor_retuen_type(dict):
         return self
     def __setstate__(self, state):
         self.update(state)
+    def __len__(self,):
+        return len([*self.values()][0])
         
     
 

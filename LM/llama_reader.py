@@ -96,7 +96,8 @@ class LLaMa_reader:
             kwargs['attention_mask'] = torch.cat([encoder_masks, masks.to(encoder_masks.device)],dim=-1)
 
         labels = kwargs.get('labels', None)
-            
+        if labels is not None:
+            del kwargs['labels']
         position_ids = torch.arange(kwargs['input_ids'].shape[1]).tile([kwargs['input_ids'].shape[0],1])
         output = self.model(**kwargs,
                             position_ids = position_ids,
@@ -108,8 +109,8 @@ class LLaMa_reader:
         if labels is not None:
             labels = labels
             # Shift so that tokens < n predict n
-            shift_logits = lm_logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
+            shift_logits = lm_logits[..., :-1, :]
+            shift_labels = labels[..., 1:]
             # Flatten the tokens
             loss = -torch.log_softmax(shift_logits, dim=-1)[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
             mask = shift_labels==-100
