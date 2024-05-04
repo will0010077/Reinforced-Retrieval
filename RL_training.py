@@ -104,12 +104,14 @@ if __name__=="__main__":
 
     print('Initilize retriever')
     lex_MAE_retriver=lex_retriever()
-    lex_MAE_retriver.to('cpu')
     lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever895.pt', map_location='cpu')['enc_model_state_dict'])
 
     data=torch.load('data/data_reduced_100000.pt') ## shape:(N,d)
     retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
     retriever.to('cpu')
+    retriever.model.to('cpu')
+    retriever.model.device='cpu'
+    del lex_MAE_retriver, data, cluster
     
     
     max_epoch = 10
@@ -135,13 +137,15 @@ if __name__=="__main__":
             B = len(q)
             iter+=1
             
+            
+            # send to gpu to retrieval loop
+            # policy.to(device)
             ret = retriever.forward(q)[:,None,:]# (B,1,d)
             outputs = ret
             neg_set=[]
             doc_set = []
             
             with torch.no_grad():
-                
                 #retrieval loop
                 for k in range(num_retrieve):
                     qt = policy.next(ret) #(B,d)
@@ -157,6 +161,8 @@ if __name__=="__main__":
                     neg_set.append(zt)
                     ret = torch.cat([ret, sel_z.to(ret.device, non_blocking=True)], dim = 1)
                     outputs = torch.cat([outputs, qt[:,None,:]], dim = 1)
+            # policy.to('cpu')
+            # retriever.to('cpu')
             
             # pos neg pair reshape
             doc_set = torch.cat(doc_set, dim=1)#(B, 5, n)
@@ -182,6 +188,7 @@ if __name__=="__main__":
             # labels[labels==-100]=0
             # print(LM.tokenizer.batch_decode(labels))
             
+            
             # !!!LLM prefix tuning forward, loss and reward!!!
             y, loss = LM.forward(**tokens, encoder_output=prefix, encoder_masks=prefix_masks)
             del y
@@ -195,7 +202,7 @@ if __name__=="__main__":
                 Enc_optim.step()
             train_bar.set_postfix_str(f'len: {tokens.input_ids.shape[-1]}, loss: {loss.item():.3f}, reward: {ma_reward:.2f}')
             
-            if loss.item()>2:
+            if loss.item()>5:
                 continue
             # update replay buffer
             for i in range(len(q)):
@@ -221,7 +228,7 @@ if __name__=="__main__":
                         loss.backward()
                         RL_optim.step()
                         ma_loss = ma_loss*0.99+loss*0.01
-                        train_bar.set_postfix_str(f'loss: {pi_loss.mean():.3f}/{v_loss.mean():.3f}/{reg_loss.mean():.3f}/{ma_loss:.3f}, reward: {ma_reward:.2f}')
+                        train_bar.set_postfix_str(f'loss: {pi_loss.mean():.3f}/{v_loss.mean():.3f}/{reg_loss.mean():6e}/{ma_loss:.3f}, reward: {ma_reward:.2f}')
                     del t
                 policy.to('cpu')
                     

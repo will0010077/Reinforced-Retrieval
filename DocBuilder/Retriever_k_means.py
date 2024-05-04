@@ -25,8 +25,9 @@ model_config = config['model_config']
 device='cuda' if torch.cuda.is_available() else 'cpu'
 # device='cpu'
 
-class cluster_builder:
+class cluster_builder(nn.Module):
     def __init__(self, data = None, k = 3000, sparse_dim=128):
+        super().__init__()
         self.centers = None
         self.idx = None
         self.dim = None
@@ -159,7 +160,7 @@ class cluster_builder:
         if name is None:
             name = datetime.datetime.now().strftime('%m_%d_%H_%M')
         data_path = f'data/clusted_data_{name}.pt'
-        torch.save({'center':self.centers.to_sparse(), 'idx':self.clusted_idx, 'data':self.clusted_data}, data_path)
+        torch.save({'centers':self.centers.to_sparse(), 'idx':self.clusted_idx, 'data':self.clusted_data}, data_path)
         print('save done!!')
         return name
 
@@ -169,10 +170,17 @@ class cluster_builder:
         assert name is not None
         data_path = f'data/clusted_data_{name}.pt'
         loaded_dict = torch.load(data_path, map_location='cpu')
-        self.centers = loaded_dict['center'].to_dense()
+        del self.centers
+        self.register_buffer('centers', loaded_dict['centers'].to_dense())
+        self.centers:Tensor
+        
+        
         self.clusted_idx = loaded_dict['idx']
+        
+        
         self.clusted_data = loaded_dict['data']
-
+        self.clusted_data = [d.coalesce() if not d.is_coalesced() else d for d in self.clusted_data]
+        
         self.dim = self.centers.shape[-1]
         if self.centers.shape[0]!=self.k:
             raise RuntimeError(f'The cluster with k={self.centers.shape[0]} and init k={self.k} are not the same!')
@@ -223,15 +231,16 @@ class cluster_builder:
         idx = []
         for i, v in enumerate(x):
             v = top_k_sparse(v[None,:], self.sparse_dim)[0].coalesce()
-            v=v.cpu()
-            
+            v = v.to(self.centers.device)
             v_dist = []
             v_idx = []
-            for c in c_idx[i]:
+            
+            sended_data = [self.clusted_data[d].to(self.centers.device, non_blocking=True) for d in c_idx[i]]
+            for i, c in enumerate(c_idx[i]):
                 # original inner product
                 # v_c_dist, v_c_idx = self.second(v, self.clusted_data[c].to_dense(), k) # 15 iter/sec
                 # new operation for sparse tensor
-                v_c_dist, v_c_idx = self.second(v, self.clusted_data[c], k)  # 50 iter/sec
+                v_c_dist, v_c_idx = self.second(v, sended_data[i], k)  # 50 iter/sec
                 
                 v_dist.append(v_c_dist)
                 v_idx.append(torch.stack([c.tile(len(v_c_idx)), v_c_idx]).T)
@@ -248,6 +257,8 @@ class cluster_builder:
         '''v: query with shape (d)
         c: cluster vectors with shape(n,d)
         out: output idx() with shape (k)'''
+        assert len(v.shape) == 1
+        assert len(c.shape) == 2
         if c.is_sparse:
             dist = custom_sparse_mmT(v, c)
         else:
@@ -266,7 +277,6 @@ class doc_retriever(torch.nn.Module):
         self.model.requires_grad_(False)
         self.data= data
         self.cluster = cluster
-        self.ref = torch.nn.Parameter(torch.zeros(1))
         if use_cache:
             self.retrieve_cache= {}
 
@@ -296,7 +306,7 @@ class doc_retriever(torch.nn.Module):
         return retrieved_segs, emb
     
     def forward(self, querys:list[str]):
-        x=self.tokenizer(querys, return_tensors='pt', padding=True ,truncation=True).to(self.ref.device)
+        x=self.tokenizer(querys, return_tensors='pt', padding=True ,truncation=True).to(self.model.device)
         return  self.model(x)
         
 if __name__=='__main__':

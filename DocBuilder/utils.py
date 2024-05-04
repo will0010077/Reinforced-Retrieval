@@ -72,6 +72,9 @@ def custom_sparse_mmT(a: Tensor, b: Tensor) -> Tensor:
     b: sparse matrix shape(M,d)
     output a@b.T with shape (M)
     '''
+    
+    assert len(a.shape) == 1
+    assert len(b.shape) == 2
     # Get indices with values of a
     indices_a = a.indices().squeeze()
     values_a = a.values()
@@ -93,8 +96,8 @@ def custom_sparse_mmT(a: Tensor, b: Tensor) -> Tensor:
     M = b.size(0)
     
     # Create a map from filtered indices of a to new indices [0, k]
-    inverted_index = torch.full([d], d, dtype=torch.long)
-    inverted_index[indices_a]=torch.arange(k, dtype=torch.long)
+    inverted_index = torch.full([d], d, dtype=torch.long, device = b.device)
+    inverted_index[indices_a]=torch.arange(k, dtype=torch.long, device = b.device)
     # print(inverted_index)#check OK
     
     # Map the filtered indices of b to new indices [0, k]
@@ -105,7 +108,7 @@ def custom_sparse_mmT(a: Tensor, b: Tensor) -> Tensor:
     
     # Create a dense matrix from mapped indices and values of b
     # b_dense = torch.sparse_coo_tensor(mapped_indices_b, filtered_values_b, (M, k)).to_dense()
-    b_dense = torch.zeros([M,k], dtype=b.dtype)
+    b_dense = torch.zeros([M,k], dtype=b.dtype, device = b.device)
     b_dense[mapped_indices_b[0], mapped_indices_b[1]] = filtered_values_b
 
     # Perform matrix multiplication (transposed)

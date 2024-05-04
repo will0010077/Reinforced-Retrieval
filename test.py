@@ -3,13 +3,10 @@ import torch
 from time import time
 from DocBuilder.utils import split_list_to_batch, restore_batched_list, unbind_sparse, top_k_sparse, tensor_retuen_type
 
-a = tensor_retuen_type(input_ids = torch.tensor([1]), attention_masks = torch.tensor([2]))
-a = a.to('cuda')
-b = tensor_retuen_type(**a)
-print(b)
-c = b.to('cuda')
-print(c)
-exit(0)
+
+
+exit()
+
 if __name__=='__main__':
 #     data=torch.load('data/vecs_reduced_5000000.pt') ## shape:(N,d)
 #     print('converting...')
