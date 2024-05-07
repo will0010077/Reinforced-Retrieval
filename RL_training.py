@@ -59,6 +59,9 @@ if __name__=="__main__":
     device='cuda'
     
 
+    cluster_config=config["cluster_config"]
+    cluster = cluster_builder(k=cluster_config["k"])
+    cluster.load('05_02_19_08')
     # pre compute embbeding
 
 
@@ -98,15 +101,12 @@ if __name__=="__main__":
     replay = doc_buffer(max_len=2**10)
 
     # init retriever
-    cluster_config=config["cluster_config"]
-    cluster = cluster_builder(k=cluster_config["k"])
-    cluster.load('05_02_21_28')
 
     print('Initilize retriever')
     lex_MAE_retriver=lex_retriever()
     lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever895.pt', map_location='cpu')['enc_model_state_dict'])
 
-    data=torch.load('data/data_reduced_100000.pt') ## shape:(N,d)
+    data=torch.load('data/data_reduced_10000000.pt') ## shape:(N,d)
     retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
     retriever.to('cpu')
     retriever.model.to('cpu')
@@ -169,6 +169,7 @@ if __name__=="__main__":
             doc_set = doc_set.reshape([-1, doc_set.shape[-1]])#(B*k, n)
             
             neg_set = torch.stack(neg_set, dim=1) #(B, 5, neg, n)
+            
             # print(ret.shape, outputs.shape, doc_set.shape)#torch.Size([8, #ret+1, 30522]) torch.Size([8, #ret+1, 30522]) torch.Size([8, #ret, n])
             
             # doc = [retriever.tokenizer.batch_decode(doc_set[i]) for i in range(len(doc_set))]
@@ -224,11 +225,12 @@ if __name__=="__main__":
                         ma_reward = ma_reward*0.98+t.rewards.mean().item()*0.02
                         # !!!policy update!!!
                         pi_loss, v_loss, reg_loss, flops_loss = policy.get_loss(t)
-                        loss = (pi_loss + v_loss+ 0.005*reg_loss+ 0.00001*flops_loss).mean() 
+                        del flops_loss
+                        loss = (pi_loss + v_loss+ 0.005*reg_loss).mean() 
                         loss.backward()
                         RL_optim.step()
                         ma_loss = ma_loss*0.99+loss*0.01
-                        train_bar.set_postfix_str(f'loss: {pi_loss.mean():.3f}/{v_loss.mean():.3f}/{reg_loss.mean():6e}/{ma_loss:.3f}, reward: {ma_reward:.2f}')
+                        train_bar.set_postfix_str(f'loss: {pi_loss.mean():.3f}/{v_loss.mean():.3f}/{reg_loss.mean():7.2e}/{ma_loss:.3f}, reward: {ma_reward:.2f}')
                     del t
                 policy.to('cpu')
                     

@@ -3,6 +3,7 @@ import sys
 sys.path.append('..')
 import torch
 from torch import Tensor, nn
+import torch.nn.functional as F
 import math
 from DocBuilder.Retriever_k_means import inner
 from DocBuilder.utils import sparse_retrieve_rep, tensor_retuen_type
@@ -18,13 +19,6 @@ class transition(tensor_retuen_type):
         '''
         super().__init__(*args, **kwargs)
         
-    def __getattr__(self, name: str) -> Tensor:
-        if name in self.keys():
-            return self[name]
-        
-        def f(*args, **kwargs):
-            return tensor_retuen_type(**{i:getattr(self[i], name)(*args, **kwargs) for i in self})
-        return f
     
     def __getstate__(self,):
         return self
@@ -131,10 +125,14 @@ class Transformer_Agent(nn.Module):
     def __init__(self, in_dim, dim=768, **kwargs):
         super().__init__()
         self.model = perturb_model(in_dim, dim, **kwargs)
-        self.lam = nn.Parameter(torch.ones(1)*-3, True)
     def forward(self, x):
+        '''
+        forward output y with nromalize and value
+        '''
         y, v=self.model.forward(x)
-        return sparse_retrieve_rep(y)+x, v
+        y = sparse_retrieve_rep(y)+x
+        y = F.normalize(y, dim=-1)
+        return y, v
     
     @torch.no_grad()
     def next(self, x:torch.Tensor):
@@ -165,7 +163,7 @@ class Transformer_Agent(nn.Module):
         v_loss = adv**2
         pi_loss = - adv.detach() * log_pi
         # regularization to original input query
-        reg_loss = ((outputs - t.inputs)**2).sum(-1)
+        reg_loss = ((outputs - t.inputs).abs()).sum(-1)
         # FLOPS loss
         flops_loss = torch.abs(outputs).sum(-1)**2
         return pi_loss, v_loss, reg_loss, flops_loss   

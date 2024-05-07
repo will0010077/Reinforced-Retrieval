@@ -5,7 +5,7 @@ from DocBuilder.Retriever_k_means import cluster_builder
 from DocBuilder.utils import top_k_sparse, generate_mask, sparse_retrieve_rep, max_pooling, cos_sim
 import torch
 from torch import Tensor
-
+import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel,AutoModelWithLMHead, BertTokenizerFast
 from transformers import BertConfig, BertLMHeadModel,AutoModelForMaskedLM
 import logging
@@ -119,8 +119,9 @@ class lex_retriever(torch.nn.Module):
             feature  = self.forward(idx)#(bs, d)
 
             # sparse_feature = [top_k_sparse(v, 128).cpu() for v in feature]
-            sparse_feature = top_k_sparse(feature, config['cluster_config']['k_sparse']).cpu() # (bs, d) with sparse
-            feature_list.append(sparse_feature) # (len, bs, d)
+            feature = F.normalize(feature, dim=-1)
+            sparse_feature = top_k_sparse(feature, config['cluster_config']['k_sparse']) # (bs, d) with sparse
+            feature_list.append(sparse_feature.cpu()) # (len, bs, d)
         return  torch.cat(feature_list)
     def collate(self, ids):
         ids = torch.stack(ids)

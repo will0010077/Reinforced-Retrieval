@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from tqdm import tqdm
 import multiprocessing as mp
@@ -54,7 +55,9 @@ def max_pooling(token_embeddings:Tensor, mask:Tensor):
 def cos_sim(a:Tensor, b:Tensor):
     '''a:(N,d),b:(M,d)
     out: (N,M)'''
-    return (a @ b.T)/(torch.norm(a,dim=1)[:,None]@torch.norm(b,dim=1)[None,:])
+    a = F.normalize(a, dim = -1)
+    b = F.normalize(b, dim = -1)
+    return inner(a,b)
 
 def inner(a:Tensor, b:Tensor):
     '''a:(N,d),b:(M,d)
@@ -200,6 +203,9 @@ class tensor_retuen_type(dict):
             return tensor_retuen_type(**{i:getattr(self[i], name)(*args, **kwargs) for i in self})
         return f
     
+    def __setattr__(self, name: str, value: torch.Any) -> None:
+        self[name] = value
+        
     def __getstate__(self,):
         return self
     def __setstate__(self, state):

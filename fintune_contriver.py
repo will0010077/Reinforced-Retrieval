@@ -147,7 +147,7 @@ def collect_fn(batch):
     # output_b = torch.cat([torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.cls_token_id, output_b, torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.eos_token_id], dim=1)#(B,256)
     return output_a, output_b
 
-F_lambda=0.001
+F_lambda=2**2
 def trainer(epoch, model:nn.Module, early_stop=None):
     global F_lambda
     model.train()
@@ -167,7 +167,9 @@ def trainer(epoch, model:nn.Module, early_stop=None):
 
         q = model(q)
         a = model(a)
-        loss, dis =xt_xent(q, a, temperature=0.01)
+        q = F.normalize(q, dim=-1)
+        a = F.normalize(a, dim=-1)
+        loss, dis =xt_xent(q, a, temperature=1/2**7)
         dis = dis.item()
         loss += F_lambda*(flop_loss.forward(q)+flop_loss.forward(a))#vicreg(q,a)
         # loss += -dis*0.1
@@ -204,6 +206,8 @@ def validation(model:nn.Module):
             a.to(device)
             z_q = model(q)
             z_a = model(a)
+            z_q = F.normalize(z_q, dim=-1)
+            z_a = F.normalize(z_a, dim=-1)
             z_q = top_k_sparse(z_q, config['cluster_config']['k_sparse']).to_dense()
             z_a = top_k_sparse(z_a, config['cluster_config']['k_sparse']).to_dense()
             querys.append(z_q.to('cpu'))
@@ -241,7 +245,7 @@ if __name__=='__main__':
     torch.manual_seed(seed)
     random.seed(seed)
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-    train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True,collate_fn=collect_fn, num_workers=6, persistent_workers=True)
+    train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True,collate_fn=collect_fn, num_workers=6, persistent_workers=True)
     val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False,collate_fn=collect_fn)
 
 

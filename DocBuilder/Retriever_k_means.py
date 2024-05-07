@@ -4,9 +4,10 @@ sys.path.append("..")
 # Load model directly
 import torch
 from torch import Tensor, nn
+import torch.nn.functional as F
 from DocBuilder.utils import inner, collate_list_to_tensor, custom_sparse_mmT, top_k_sparse
 
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel, BertTokenizerFast
 import logging
 import time, datetime
 from torch.utils.data import DataLoader
@@ -36,10 +37,16 @@ class cluster_builder(nn.Module):
         self.data = None
     def get_mu(self, x:Tensor, r:Tensor, mu:Tensor, lr:float):
         '''x: (n, c), r: (n), mu: (k, c), a: in [0,1]'''
-        u = [x[r==i].mean(dim=0) for i in range(self.k)]
+        u = []
+        for i in range(self.k):
+            temp = x[r==i]
+            if len(temp)>1:
+                u.append(temp[:-1].mean(dim=0))
+            else:
+                u.append(temp.mean(dim=0))
         u = torch.stack(u)
         u = u*lr + mu*(1-lr)
-        u = top_k_sparse(u, 256).to_dense()
+        # u = top_k_sparse(u, config['cluster_config']['k_sparse']//2).to_dense()
 
         dis=(u-mu).norm(dim=-1).max()
 
@@ -47,9 +54,8 @@ class cluster_builder(nn.Module):
 
     def get_r(self, x, mu)->Tensor:
         '''x: (n, c), mu: (k, c), r: (n)'''
-        dis=inner(x, mu)#this was a bug!! please rename them
-        min_k = torch.argmax(dis, axis=1)
-        min_k[-self.k:]=torch.arange(self.k, device=min_k.device)
+        sim=inner(x, mu)
+        min_k = torch.argmax(sim, axis=1)
         return min_k
 
     def select_init_mu(self, x, k)->Tensor:
@@ -76,6 +82,7 @@ class cluster_builder(nn.Module):
             bar=  tqdm(loader, ncols = 0)
             for data in bar:
                 data:Tensor = data.to(device)
+                # data.resize_([data.shape[0]+self.k, data.shape[1]])
                 data.sparse_resize_([data.shape[0]+self.k, data.shape[1]], data.sparse_dim(), data.dense_dim())
                 data = data.to_dense()
                 data[-self.k:] = mu
@@ -83,13 +90,16 @@ class cluster_builder(nn.Module):
                 it=0
                 while dis>tol and it<10:
                     it+=1
+                    count_new+=1
                     # data[-self.k:, :]=mu
                     r = self.get_r(data, mu)
+                    r[-self.k:]=torch.arange(self.k, device=r.device)
                     mu, dis = self.get_mu(data, r, mu, lr)
-                    bar.set_description_str(f'dist:{dis:.4f}, max/min: {max(count)/min(count):.1f}')
-                if count_new<500:
                     ele, count = r.unique(return_counts = True)
-                    mu[ele[count.argmin()]] = mu[ele[count.argmax()]]+0.001*torch.randn([self.size[1]], device=mu.device)
+                    bar.set_description_str(f'dist:{dis:.4f}, max/min: {max(count)/min(count):.1f}')
+                    if count_new<5000 and count_new%10==0:
+                        ele, count = r.unique(return_counts = True)
+                        mu[ele[count.argmin()]] = mu[ele[count.argmax()]]+0.001*torch.randn([self.size[1]], device=mu.device)
             del data, r
         del loader
         
@@ -119,14 +129,15 @@ class cluster_builder(nn.Module):
         print('cluster building...')
         if data is not None:
             self.data = data
-            self.idx = self.get_idx(self.centers)
+            self.idx = self.get_idx(self.centers, 50000)
         temp_idx = self.idx
         argsort_idx = temp_idx.argsort()
-        _, count = temp_idx.unique(return_counts = True)
-        del _
-        count=count.tolist()
+        idx, count = temp_idx.unique(return_counts = True)
+        z =  torch.zeros([self.k], dtype=torch.long)
+        z[idx] = count
+        count = z.tolist()
         sort_count = sorted(count)
-        print('Maximum cluster:',sort_count[-10:],', minimum cluster:',sort_count[:10])
+        print('Maximum cluster:',sort_count[-10:],', minimum cluster:',sort_count[:10], 'All:', count)
         
         series = torch.arange(len(self.idx))
         series = series[argsort_idx]
@@ -145,7 +156,8 @@ class cluster_builder(nn.Module):
         '''-----------------------'''
         # self.clusted_data = self.data.split(count)
         '''new split method for list'''
-        self.clusted_data = [torch.stack(self.data[sum(count[:i]):sum(count[:i+1])]).coalesce() for i in range(len(count))]
+        self.clusted_data = [torch.stack(self.data[sum(count[:i]):sum(count[:i+1])]) for i in range(len(count))]
+        # self.clusted_data = [torch.stack(self.data[sum(count[:i]):sum(count[:i+1])]).coalesce() for i in range(len(count))]
 
         del self.data
         print('build cluster done...')
@@ -173,13 +185,33 @@ class cluster_builder(nn.Module):
         del self.centers
         self.register_buffer('centers', loaded_dict['centers'].to_dense())
         self.centers:Tensor
-        
+        sparse_centers = top_k_sparse(self.centers, 32)
         
         self.clusted_idx = loaded_dict['idx']
         
         
         self.clusted_data = loaded_dict['data']
         self.clusted_data = [d.coalesce() if not d.is_coalesced() else d for d in self.clusted_data]
+        self.lens = torch.tensor([len(d) for d in self.clusted_data])
+        max_cluster=torch.topk(self.lens, 5)
+        min_cluster=torch.topk(self.lens, 5, largest=False)
+        
+        tokenizer = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")
+        print('cluster min:')
+        
+        for m in min_cluster.indices:
+            z = sparse_centers[m]
+            print(self.clusted_idx[m])
+            for i, v in sorted(zip(tokenizer.convert_ids_to_tokens(z.coalesce().indices()[0]), z.coalesce().values()), key=lambda x:x[1], reverse=True):
+                print(f'{i}:{v:.3f}, ',end='')
+            print()
+        print('max:')
+        for m in max_cluster.indices:
+            z = sparse_centers[m]
+            for i, v in sorted(zip(tokenizer.convert_ids_to_tokens(z.coalesce().indices()[0]), z.coalesce().values()), key=lambda x:x[1], reverse=True):
+                print(f'{i}:{v:.3f}, ',end='')
+            print()
+        print('cluster min:', min_cluster.values, ', max:', max_cluster.values, ', sum:', sum(self.lens))
         
         self.dim = self.centers.shape[-1]
         if self.centers.shape[0]!=self.k:
@@ -230,14 +262,13 @@ class cluster_builder(nn.Module):
 
         idx = []
         for i, v in enumerate(x):
-            v = top_k_sparse(v[None,:], self.sparse_dim)[0].coalesce()
-            v = v.to(self.centers.device)
+            v:Tensor = v.to_sparse()
             v_dist = []
             v_idx = []
             
             sended_data = [self.clusted_data[d].to(self.centers.device, non_blocking=True) for d in c_idx[i]]
             for i, c in enumerate(c_idx[i]):
-                # original inner product
+                # original inner 
                 # v_c_dist, v_c_idx = self.second(v, self.clusted_data[c].to_dense(), k) # 15 iter/sec
                 # new operation for sparse tensor
                 v_c_dist, v_c_idx = self.second(v, sended_data[i], k)  # 50 iter/sec
@@ -253,7 +284,7 @@ class cluster_builder(nn.Module):
         idx = torch.stack(idx)
         return idx
 
-    def second(self, v ,c ,k):
+    def second(self, v:Tensor ,c:Tensor ,k:int):
         '''v: query with shape (d)
         c: cluster vectors with shape(n,d)
         out: output idx() with shape (k)'''
@@ -262,7 +293,7 @@ class cluster_builder(nn.Module):
         if c.is_sparse:
             dist = custom_sparse_mmT(v, c)
         else:
-            dist = inner(v[None,:], c)[0]#(n)
+            dist = inner(v.to_dense()[None,:], c)[0]#(n)
         d, idx = dist.topk(min(k,len(c)), dim = 0)#(k)
         return d.cpu(), idx.cpu()
 
@@ -277,6 +308,8 @@ class doc_retriever(torch.nn.Module):
         self.model.requires_grad_(False)
         self.data= data
         self.cluster = cluster
+        if len(self.data)!=sum(self.cluster.lens):
+            raise ValueError(f'number of segments: {len(self.data)} is not equal to cluster: {sum(self.cluster.lens)}')
         if use_cache:
             self.retrieve_cache= {}
 
@@ -297,7 +330,9 @@ class doc_retriever(torch.nn.Module):
             raise TypeError(querys)
         if len(query_feature.shape)==1:
             query_feature=query_feature[None,:]
-        idx, emb = self.cluster.search(query_feature.to(self.cluster.centers.device), k, num_search)
+        query_feature = query_feature.to(self.cluster.centers.device)
+        query_feature = top_k_sparse(query_feature, self.cluster.sparse_dim).to_dense()
+        idx, emb = self.cluster.search(query_feature, k, num_search)
         #cosine similarity
         idx=idx.to(self.data.device)
         retrieved_segs = self.data[idx]#shape:(B,k,len)

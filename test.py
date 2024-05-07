@@ -2,9 +2,19 @@
 import torch
 from time import time
 from DocBuilder.utils import split_list_to_batch, restore_batched_list, unbind_sparse, top_k_sparse, tensor_retuen_type
+from DocBuilder.Retriever_k_means import cluster_builder
+import matplotlib as plt
 
-
-
+a = 0.1*torch.randn([10000, 2])+0
+b = 0.1*torch.randn([10000, 2])+10
+data = torch.cat([a,b])
+cluster = cluster_builder(k=2)
+cluster.train(data, epoch = 100, bs = 1000)
+cluster.build()
+print(cluster.centers)
+plt.scatter(a)
+plt.Scatter(b)
+plt.save
 exit()
 
 if __name__=='__main__':

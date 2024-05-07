@@ -17,6 +17,7 @@ nltk = "*"
 html5lib = "*"
 h5py = "*"
 accelerate = "*"
+matplotlib = "*"
 
 [dev-packages]
 
