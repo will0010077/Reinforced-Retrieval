@@ -93,7 +93,6 @@ class perturb_model(nn.Module):
         self.layer = torch.nn.TransformerEncoderLayer(d_model=dim, nhead=num_heads, dim_feedforward=dim, dropout=dropout,batch_first=True)
         self.model=torch.nn.TransformerEncoder(self.layer, num_layers)
         # self.model = torch.nn.ModuleList([torch.nn.MultiheadAttention(dim, num_heads, batch_first=True) for _ in range(num_layers)])
-        self.lam = torch.nn.Parameter(torch.tensor(-10,dtype=torch.float))
         self.pos_encoder = PositionalEncoding(dim, dropout=dropout, max_len=16)
         self.dim=dim
         self.in_dim=in_dim
@@ -130,7 +129,7 @@ class Transformer_Agent(nn.Module):
         forward output y with nromalize and value
         '''
         y, v=self.model.forward(x)
-        y = sparse_retrieve_rep(y)+x
+        y = F.relu_(y+x)
         y = F.normalize(y, dim=-1)
         return y, v
     

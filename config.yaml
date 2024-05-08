@@ -30,15 +30,15 @@ model_config:
   embed_dim: 768
 
 cluster_config:
-  k: 1000
-  bs: 50000
-  lr: 0.1
-  tol: 0.15
+  k: 4000
+  bs: 100000
+  lr: 0.5
+  tol: 0.05
   num_search: 4
   k_sparse: 64
 
 data_config:
-  num_doc: 1000000
+  num_doc: 10000000
   num_samples: 100000
   windows: 96
   step: 64

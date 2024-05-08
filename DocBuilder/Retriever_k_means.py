@@ -46,7 +46,7 @@ class cluster_builder(nn.Module):
                 u.append(temp.mean(dim=0))
         u = torch.stack(u)
         u = u*lr + mu*(1-lr)
-        # u = top_k_sparse(u, config['cluster_config']['k_sparse']//2).to_dense()
+        u = top_k_sparse(u, config['cluster_config']['k_sparse']).to_dense()
 
         dis=(u-mu).norm(dim=-1).max()
 
@@ -97,8 +97,7 @@ class cluster_builder(nn.Module):
                     mu, dis = self.get_mu(data, r, mu, lr)
                     ele, count = r.unique(return_counts = True)
                     bar.set_description_str(f'dist:{dis:.4f}, max/min: {max(count)/min(count):.1f}')
-                    if count_new<5000 and count_new%10==0:
-                        ele, count = r.unique(return_counts = True)
+                    if max(count)/min(count)>20:
                         mu[ele[count.argmin()]] = mu[ele[count.argmax()]]+0.001*torch.randn([self.size[1]], device=mu.device)
             del data, r
         del loader

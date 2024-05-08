@@ -173,7 +173,7 @@ if __name__ == '__main__':
                     }, checkpoint_path.replace(".pt",f"_loss_{best_loss:.4f}.pt"))
             scheduler.step()
 
-    elif sys.argv[1]=="save_embed": # 12hr
+    elif sys.argv[1]=="save_embed": # 2hr
         device='cuda'
         data = dataset.DocumentDatasets('data/segment/segmented_data_', 12)
 
@@ -194,7 +194,7 @@ if __name__ == '__main__':
 
         lex_MAE_retriver=lex_retriever()
         lex_MAE_retriver.to(device)
-        load_path = 'save/LEX_MAE_retriever895.pt'
+        load_path = 'save/LEX_MAE_retriever904.pt'
         lex_MAE_retriver.model.load_state_dict(torch.load(load_path, map_location='cpu')['enc_model_state_dict'])
         print('load weight from',load_path)
         
@@ -210,12 +210,13 @@ if __name__ == '__main__':
         # print(torch.load(f'data/data_reduced_{num_samples}.pt'))
     elif sys.argv[1]=="doc_build":
         cluster_config=config["cluster_config"]
-        data=torch.load('data/vecs_reduced_1000000.pt', mmap=True) ## shape:(N,d)
+        data= torch.load('data/vecs_reduced_1000000.pt', mmap=True) ## shape:(N,d)
         print('converting...')
         runer = unbind_sparse(data)
         del data
         data = runer.run()
         del runer
+        
 
         ## Train
         print(len(data))

@@ -147,7 +147,7 @@ def collect_fn(batch):
     # output_b = torch.cat([torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.cls_token_id, output_b, torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.eos_token_id], dim=1)#(B,256)
     return output_a, output_b
 
-F_lambda=2**2
+F_lambda=2**5
 def trainer(epoch, model:nn.Module, early_stop=None):
     global F_lambda
     model.train()
@@ -179,19 +179,20 @@ def trainer(epoch, model:nn.Module, early_stop=None):
         with torch.no_grad():
             _,ids=torch.topk((q@a.T).to_dense(),5,largest=True)#(N,5)
             eye=torch.arange(len(q))[:,None].to(device)
+            sparse_error = 0.5*torch.norm(q - top_k_sparse(q.detach(), config['cluster_config']['k_sparse']).to_dense(), dim=-1).mean()
+            sparse_error += 0.5*torch.norm(a - top_k_sparse(a.detach(), config['cluster_config']['k_sparse']).to_dense(), dim=-1).mean()
 
         acc=(eye==ids).sum()/len(ids)
         ma_acc = 0.99*ma_acc + 0.01*acc
         ma_loss = 0.99*ma_loss + 0.01*loss
         ma_dis = 0.99*ma_dis + 0.01*dis
         bar.set_description(f'epoch[{epoch+1:3d}/{num_epochs}]|Training')
-        bar.set_postfix_str(f'loss: {ma_loss:.4f}, dis: {ma_dis:.2f}, acc: {ma_acc:.4f}')
+        bar.set_postfix_str(f'loss: {ma_loss:.4f}, dis: {ma_dis:.2f}, acc: {ma_acc:.4f}, err:{sparse_error:.4f}')
         if count>1000 and ma_acc<0.2:
             model.model.load_state_dict(torch.load(load_path, map_location='cpu')['enc_model_state_dict'])
             F_lambda = F_lambda/1.5
             print('lambda',F_lambda)
             return trainer(epoch, model, early_stop)
-    lr_scher.step(ma_loss)
 
     return ma_loss
 def validation(model:nn.Module):
@@ -262,10 +263,11 @@ if __name__=='__main__':
     optimizer = torch.optim.AdamW(lex_MAE_retriver.parameters(), 
                 lr=config['lex']['fine_lr'])
     num_epochs=40
-    lr_scher=torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20, cooldown=20, min_lr=1e-5)
-    bestacc=0.85
+    lr_scher=torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3, cooldown=3, min_lr=config['lex']['fine_lr']/10)
+    bestacc=0.88
     for i in range(num_epochs):
         loss=trainer(i, lex_MAE_retriver, early_stop=2000)
+        lr_scher.step(loss)
         acc=validation(lex_MAE_retriver)
         if acc>bestacc:
             torch.save({'enc_model_state_dict': lex_MAE_retriver.model.state_dict()}, checkpoint_path.replace(".pt",f"{int(acc*1000):03d}.pt"))
