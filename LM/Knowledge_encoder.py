@@ -29,11 +29,13 @@ class KnowEncoder(torch.nn.Module):
         self.num_prefix = num_prefix
         self.register_buffer('prefix_tokens', torch.arange(2, 2+self.num_prefix).unsqueeze_(0))#(1,P)
         self.prefix_tokens:Tensor
-    def forward(self, x, k=0, dtype=torch.float32)->tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x, k=0, dtype=torch.float32, device = None)->tuple[torch.Tensor, torch.Tensor]:
         '''
         x: (B*k, n)
         output: list[(2, B, head, k*P, dims)]*layer , [B, k*P]
         '''
+        if device is None:
+            device = self.model.device
         if type(x)==list:
             x=self.tokenizer(x, return_tensors='pt', padding=True ,truncation=True).to(self.model.device)
         
@@ -52,17 +54,17 @@ class KnowEncoder(torch.nn.Module):
         y = self.encoder_heads.forward(y)#(B*k, 5120*layer, P)
         # print('encoder_heads output:', y.shape)
         y = y.to(dtype)
-        y = y.reshape([B, k, self.num_layers, 1, self.dims, self.num_heads, self.num_prefix])
+        y = y.reshape([B, k, self.num_layers, -1, self.dims, self.num_heads, self.num_prefix])
         # print('prefix output:', y.shape)
         
         
-        y = y.permute([2,3,0,5,1,6,4])#(layer, 1, B, head, k, P, dims)
+        y = y.permute([2,3,0,5,1,6,4])#(layer, -1, B, head, k, P, dims)
         # print('before cat output:', y.shape)
-        y = y.reshape([self.num_layers, 1, B, self.num_heads, k*self.num_prefix, self.dims])#(layer, 1, B, head, k*P, dims)
-        batch = torch.tile(y, [1,2,1,1,1,1])#(layer, 2, B, head, k*P, dims)
-        # print('after cat output:', batch.shape)
+        y = y.reshape([self.num_layers, -1, B, self.num_heads, k*self.num_prefix, self.dims])#(layer, 1, B, head, k*P, dims)
+        y = y.to(device, non_blocking=True)
+        # y = torch.tile(y, [1,2,1,1,1,1])#(layer, 2, B, head, k*P, dims)
         masks = torch.ones([B, k*self.num_prefix], dtype=torch.long, device=y.device)
-        return batch.unbind(), masks
+        return y.unbind(), masks
     
     def mean_pooling(self,token_embeddings, mask):
         token_embeddings = token_embeddings.masked_fill(~mask[..., None].bool(), 0.)

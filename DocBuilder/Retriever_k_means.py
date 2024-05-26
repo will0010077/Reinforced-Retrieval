@@ -195,21 +195,21 @@ class cluster_builder(nn.Module):
         max_cluster=torch.topk(self.lens, 5)
         min_cluster=torch.topk(self.lens, 5, largest=False)
         
-        tokenizer = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")
-        print('cluster min:')
+        # tokenizer = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")
+        # print('cluster min:')
         
-        for m in min_cluster.indices:
-            z = sparse_centers[m]
-            print(self.clusted_idx[m])
-            for i, v in sorted(zip(tokenizer.convert_ids_to_tokens(z.coalesce().indices()[0]), z.coalesce().values()), key=lambda x:x[1], reverse=True):
-                print(f'{i}:{v:.3f}, ',end='')
-            print()
-        print('max:')
-        for m in max_cluster.indices:
-            z = sparse_centers[m]
-            for i, v in sorted(zip(tokenizer.convert_ids_to_tokens(z.coalesce().indices()[0]), z.coalesce().values()), key=lambda x:x[1], reverse=True):
-                print(f'{i}:{v:.3f}, ',end='')
-            print()
+        # for m in min_cluster.indices:
+        #     z = sparse_centers[m]
+        #     print(self.clusted_idx[m])
+        #     for i, v in sorted(zip(tokenizer.convert_ids_to_tokens(z.coalesce().indices()[0]), z.coalesce().values()), key=lambda x:x[1], reverse=True):
+        #         print(f'{i}:{v:.3f}, ',end='')
+        #     print()
+        # print('max:')
+        # for m in max_cluster.indices:
+        #     z = sparse_centers[m]
+        #     for i, v in sorted(zip(tokenizer.convert_ids_to_tokens(z.coalesce().indices()[0]), z.coalesce().values()), key=lambda x:x[1], reverse=True):
+        #         print(f'{i}:{v:.3f}, ',end='')
+        #     print()
         print('cluster min:', min_cluster.values, ', max:', max_cluster.values, ', sum:', sum(self.lens))
         
         self.dim = self.centers.shape[-1]
@@ -321,7 +321,7 @@ class doc_retriever(torch.nn.Module):
         if isinstance(querys, str):
             querys = [querys]
             
-        if isinstance(querys, list):
+        if isinstance(querys[0], str):
             query_feature = self.forward(querys)
         elif isinstance(querys, Tensor):
             query_feature = querys

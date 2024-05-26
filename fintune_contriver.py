@@ -14,7 +14,7 @@ import re
 from transformers import AutoTokenizer, AutoModel, BertTokenizerFast
 import yaml,os
 from DocBuilder.LexMAE import lex_retriever
-from DocBuilder.utils import top_k_sparse
+from DocBuilder.utils import top_k_sparse, tensor_retuen_type
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -23,7 +23,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # from contriver import Contriever
 seed = config['seed']
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 class FLOPS(nn.Module):
     """constraint from Minimizing FLOPs to Learn Efficient Sparse Representations
@@ -145,7 +146,7 @@ def collect_fn(batch):
     output_a = tokenizer (text=input_list_a, return_tensors="pt",padding=True,truncation=True, max_length=128)
     output_b = tokenizer (text=input_list_b, return_tensors="pt",padding=True,truncation=True, max_length=128)
     # output_b = torch.cat([torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.cls_token_id, output_b, torch.ones([len(output_b),1], dtype=torch.long)*tokenizer.eos_token_id], dim=1)#(B,256)
-    return output_a, output_b
+    return tensor_retuen_type(**output_a), tensor_retuen_type(**output_b)
 
 F_lambda=2**5
 def trainer(epoch, model:nn.Module, early_stop=None):
@@ -156,6 +157,8 @@ def trainer(epoch, model:nn.Module, early_stop=None):
     ma_acc=0.5
     flop_loss=FLOPS()
     count=0
+    stream = torch.cuda.current_stream()
+    
     for q,a in (bar:=tqdm(train_dataloader,ncols=0)):
 
         count+=1
@@ -164,7 +167,6 @@ def trainer(epoch, model:nn.Module, early_stop=None):
         optimizer.zero_grad()
         q=q.to(device)
         a=a.to(device)
-
         q = model(q)
         a = model(a)
         q = F.normalize(q, dim=-1)
@@ -240,13 +242,12 @@ if __name__=='__main__':
 
 
     lex_MAE_retriver=lex_retriever()
-    lex_MAE_retriver.to(device)
     lex_MAE_retriver.train()
 
     torch.manual_seed(seed)
     random.seed(seed)
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-    train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True,collate_fn=collect_fn, num_workers=6, persistent_workers=True)
+    train_dataloader = DataLoader(train_dataset, batch_size=192, shuffle=True,collate_fn=collect_fn, num_workers=6, persistent_workers=True, pin_memory=True)
     val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False,collate_fn=collect_fn)
 
 
@@ -258,8 +259,9 @@ if __name__=='__main__':
     else:
         print('Train from scrach')
     
-    
-
+    lex_MAE_retriver.to(device)
+    lex_MAE_retriver = nn.DataParallel(lex_MAE_retriver, device_ids=[0,1])
+    print(lex_MAE_retriver)
     optimizer = torch.optim.AdamW(lex_MAE_retriver.parameters(), 
                 lr=config['lex']['fine_lr'])
     num_epochs=40

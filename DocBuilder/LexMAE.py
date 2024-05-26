@@ -7,7 +7,7 @@ import torch
 from torch import Tensor
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel,AutoModelWithLMHead, BertTokenizerFast
-from transformers import BertConfig, BertLMHeadModel,AutoModelForMaskedLM
+from transformers import BertModel, BertConfig, BertLMHeadModel, AutoModelForMaskedLM
 import logging
 from functools import reduce
 from torch.utils.data import DataLoader
@@ -23,10 +23,13 @@ seed = config['seed']
 
 
 class lex_encoder(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, use_pretrain = False):
         super().__init__()
         self.tokenizer:BertTokenizerFast = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")
-        self.model = AutoModelForMaskedLM.from_pretrained("google-bert/bert-base-uncased")
+        if use_pretrain:
+            self.model = BertLMHeadModel.from_pretrained("google-bert/bert-base-uncased")
+        else:
+            self.model = BertLMHeadModel(BertConfig.from_pretrained("google-bert/bert-base-uncased"))
     def forward(self, x:dict, output_low=False)->list[torch.Tensor]:
         '''
         x: dict[input_ids, attention_mask]

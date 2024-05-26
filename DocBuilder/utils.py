@@ -196,9 +196,12 @@ class tensor_retuen_type(dict):
         super().__init__(*args, **kwargs)
         
     def __getattr__(self, name: str) -> Tensor:
+
         if name in self.keys():
             return self[name]
         
+        if name=='device':
+            return next(iter(self.values())).device
         def f(*args, **kwargs):
             return tensor_retuen_type(**{i:getattr(self[i], name)(*args, **kwargs) for i in self})
         return f

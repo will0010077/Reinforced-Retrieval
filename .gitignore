@@ -1,6 +1,7 @@
 __pycache__
 *.json
 *.pt
-
+*.pdf
+*.zip
 data/
 save/

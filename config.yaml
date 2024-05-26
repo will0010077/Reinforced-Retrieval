@@ -4,7 +4,7 @@ train_config:
   num_samples : null
   enc_lr : 1.e-5
   lm_lr : 1.e-5
-  agent_lr : 5.e-5
+  agent_lr : 0.e-5
   betas: [0.8, 0.998]
   weight_decay : 0.01
   topk : 1
@@ -30,7 +30,7 @@ model_config:
   embed_dim: 768
 
 cluster_config:
-  k: 4000
+  k: 3000
   bs: 100000
   lr: 0.5
   tol: 0.05
@@ -49,6 +49,7 @@ generate_config:
   top_k: 50
   num_beams: 3
   bad_words_ids: null
+  max_new_tokens: 1024
 
 
 

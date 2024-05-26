@@ -100,6 +100,7 @@ class perturb_model(nn.Module):
         self.scale1=torch.nn.Linear(in_dim, dim, bias=True)
         self.scale2=torch.nn.Linear(dim, in_dim, bias=True)
         torch.nn.init.zeros_(self.scale2.weight.data)
+        torch.nn.init.zeros_(self.scale2.bias.data)
         self.value = torch.nn.Linear(dim, 1)
                     
     def forward(self, x:torch.Tensor, mask=None)->Tensor:
@@ -152,17 +153,18 @@ class Transformer_Agent(nn.Module):
         outputs, value = self.forward(t.inputs)#(32,5,30522)
         temperture = 1
         # get neg
-        neg = (outputs[:,:,None,:] * t.neg).sum(-1)/temperture
+        neg = (outputs[:,:,None,:] @ t.neg.permute([0,1,3,2])).squeeze(-2)/temperture#(32,5,16)
+        pos = (outputs[:,:,None,:] @ t.ret[...,None])[:,:,0,0]/temperture#(32,5)
         # get maximum number to prevent overflow
         M = torch.max(neg, dim=-1, keepdim=True).values#(32,5,1)
         # log_softmax function
-        log_pi = (outputs * t.ret).sum(-1)/temperture - M[:,:,0] - (neg-M).exp().sum(-1).log()
+        log_pi = pos - M[:,:,0] - (neg-M).exp().sum(-1).log()
         
         adv = t.rewards[:,None] - value[...,0]
         v_loss = adv**2
         pi_loss = - adv.detach() * log_pi
         # regularization to original input query
-        reg_loss = ((outputs - t.inputs).abs()).sum(-1)
+        reg_loss = ((outputs - t.inputs).norm(dim=-1))
         # FLOPS loss
         flops_loss = torch.abs(outputs).sum(-1)**2
         return pi_loss, v_loss, reg_loss, flops_loss   
