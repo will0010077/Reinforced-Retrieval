@@ -8,60 +8,22 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import yaml
 import peft
-from peft.tuners.adaption_prompt.config import AdaptionPromptConfig, TRANSFORMERS_MODEL_CONFIG
+from peft.tuners.adaption_prompt.config import AdaptionPromptConfig, TRANSFORMERS_MODEL_CONFIG, prepare_config
+import math
+
+
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 
 
 sep='</s>'
 eos='</s>'
-def prepare_inputs_for_generation(
-        input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
-    ):
-    position_ids = kwargs.get("position_ids", None)
-    if past_key_values is not None:
-        # print(past_key_values[0][0].shape[-2], end='')
-        # print(input_ids.shape[1], end=' ')
-        position_ids = torch.ones([input_ids.shape[0],1], dtype=torch.long)*(input_ids.shape[1]-1)
-
-        new_key_value=[]
-        for i in range(len(past_key_values)):
-            layer_key_value=[]
-            for j in range(len(past_key_values[i])):
-                layer_key_value.append(past_key_values[i][j].expand([input_ids.shape[0],-1,-1,-1]))#(B, 40, n*k, 128)
-            new_key_value.append(torch.stack(layer_key_value))
-        past_key_values = torch.stack(new_key_value)
-        input_ids = input_ids[:, -1:]
-
-    if attention_mask is not None and position_ids is None:
-        # create position_ids on the fly for batch generation
-        position_ids = attention_mask.long().cumsum(-1) - 1
-        position_ids.masked_fill_(attention_mask == 0, 1)
-        if past_key_values is not None:
-            position_ids = position_ids[:, -1].unsqueeze(-1)
-
-    # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-    if inputs_embeds is not None and past_key_values is None:
-        model_inputs = {"inputs_embeds": inputs_embeds}
-    else:
-        model_inputs = {"input_ids": input_ids}
-
-    model_inputs.update(
-        {
-            "position_ids": position_ids,
-            "past_key_values": past_key_values,
-            "use_cache": kwargs.get("use_cache"),
-            "attention_mask": attention_mask,
-        }
-    )
-    return model_inputs
 
 class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
     
-    def __init__(self, adapter_layer_idx:int, *args, **kargs):
+    def __init__(self, *args, **kargs):
         super().__init__( *args, **kargs,)
         del self.adaption_prompt
-        self.adapter_layer_idx = adapter_layer_idx
     # overide
     def forward(self, **kwargs):
         """
@@ -77,7 +39,7 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
             raise NotImplementedError("output_attention is not currently supported.")
 
         output, _, past_key_value = self.model(**kwargs)
-        if kwargs.get("adaption_prompt", False):
+        if not hasattr(self, "adaption_prompt"):
             return output, None, past_key_value
         bsz = output.shape[0]
         q_len = output.shape[1]
@@ -96,15 +58,16 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
             key = getattr(self.model, k_proj_layer)(self.adaption_prompt)
             value = getattr(self.model, v_proj_layer)(self.adaption_prompt)
 
+        adapter_len = self.adaption_prompt.shape[-2]
         # (bsz, num_key_value_heads, adapter_len, head_dim)
         adapter_k = (
-            key.view(1, self.adapter_len, (self.model.num_heads // factor), self.model.head_dim)
-            .repeat(bsz, 1, 1, 1)
+            key.view(-1, adapter_len, (self.model.num_heads // factor), self.model.head_dim)
+            .repeat(bsz//key.shape[0], 1, 1, 1)
             .transpose(1, 2)
         )
         adapter_v = (
-            value.view(1, self.adapter_len, (self.model.num_heads // factor), self.model.head_dim)
-            .repeat(bsz, 1, 1, 1)
+            value.view(-1, adapter_len, (self.model.num_heads // factor), self.model.head_dim)
+            .repeat(bsz//key.shape[0], 1, 1, 1)
             .transpose(1, 2)
         )
         # Below is taken from https://github.com/huggingface/transformers/blob/e547458c43dfdbbb8f6a7757237e234c44e20a8f/src/transformers/models/mistral/modeling_mistral.py#L181
@@ -139,30 +102,30 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
         output = output.to(previous_dtype)
         return output, None, past_key_value
 
-
 class EncoderAdaptedModel(peft.AdaptionPromptModel):
     def __init__(self, *args, **kargs):
         super().__init__(*args, **kargs)
-    #overide
-    def forward(self, *args, prefix = None, **kargs):
-        print(prefix)
-            
 
-
-        output = self.model(*args, **kargs)
-        return output
-    def __call__(self, *args, prefix = None, **kargs):
-        return self.forward(*args, prefix=prefix, **kargs)
-
+    def _create_adapted_attentions(self, config: AdaptionPromptConfig, parents: List[nn.Module]) -> None:
+        """Wrap LlamaAttention modules with newly created AdaptedAttention modules."""
+        for par in parents:
+            attn = EncoderAdaptedAttention(
+                model_type=self.model.config.model_type,
+                adapter_len=config.adapter_len,
+                model=getattr(par, config.target_modules),
+            )
+            setattr(par, config.target_modules, attn)
         
 class LLaMa_reader(torch.nn.Module):
     def __init__(self, model_dir, device, adapter_layers=8):
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, lstrip=False, token='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')
         self.tokenizer.model_max_length=2048
+        self.tokenizer.padding_side='left'
+        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        self.tokenizer.pad_token = self.tokenizer.eos_token
         self.eos_id=self.tokenizer.eos_token_id
         self.eos=self.tokenizer.eos_token
-        self.tokenizer.pad_token_id = self.eos_id
 
         self.generate_config=config['generate_config']
         # self.model = AutoGPTQForCausalLM.from_quantized(model_dir,
@@ -174,18 +137,23 @@ class LLaMa_reader(torch.nn.Module):
         #     )
         self.model=AutoModelForCausalLM.from_pretrained(model_dir, token='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', device_map=device, use_cache=True, torch_dtype=torch.float16)
         # print(self.model)
+        self.model.generation_config.pad_token_id = self.tokenizer.pad_token_id
+        self.model.generation_config.stop_strings=[]
+        self.model.train(False)
+        self.model.requires_grad_(False)
 
         peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=adapter_layers, adapter_len=1)}
-        self.model = peft.AdaptionPromptModel(self.model, configs = peft_configs, adapter_name='Enc')
-        self.model.training=False
-        self.model.requires_grad_(False)
+        self.model = EncoderAdaptedModel(self.model, configs = peft_configs, adapter_name='Enc')
+        self.module_name = prepare_config(peft_configs['Enc'], self.model).target_modules
+        # for par in self.model._parents['Enc']:
+        #     getattr(par, self.module_name).adaption_gate.requires_grad_(True)
         # for p in self.model.parameters():
         #     p.requires_grad_(False)
         self.chat_history = []
         self.system_prompt = ''
         self.external=None
 
-    def forward(self, *args, **kwargs)->tuple[Tensor, Tensor]:
+    def forward(self, *args, prefix=None, **kwargs)->tuple[Tensor, Tensor]:
         '''
         forward function for teacher forcing\\
         the shape of ids, target, masks is (B,n)\\
@@ -198,22 +166,12 @@ class LLaMa_reader(torch.nn.Module):
             del kwargs['labels']
 
 
-        
-        if kwargs.get('prefix', False):
-            for par, p in zip(self.model._parents['Enc'], kwargs['prefix']):
-                setattr(par, "adaption_prompt", p)
-            del kwargs['prefix']
-
-
+        self._set_prefix(prefix)
         output = self.model(**kwargs)
-
-
-        if kwargs.get('prefix', False):
-            for par in self.model._parents['Enc']:
-                delattr(par, "adaption_prompt")
+        self._del_prefix(prefix)
         lm_logits:Tensor = output.logits
         labels:Tensor
-        
+        del output.past_key_values
         if labels is not None:
             labels = labels
             # Shift so that tokens < n predict n
@@ -223,13 +181,13 @@ class LLaMa_reader(torch.nn.Module):
             loss = -torch.log_softmax(shift_logits, dim=-1)[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
             mask = shift_labels==-100
             loss = loss.masked_fill_(mask, 0)
-            loss = loss.sum(-1)/(~mask).sum(-1)
+            output.loss = loss.sum(-1)/(~mask).sum(-1)
+
         
-            return lm_logits, loss
-        return lm_logits
+        return output
 
     @torch.inference_mode()
-    def generate(self, message, encoder_output = None, encoder_masks=None, max_new_tokens = 1024, test=False, streamer=True):
+    def generate(self, message, cache = None,  max_new_tokens = 1024, streamer=False, prefix=None, stop_strings=[]):
         '''
         for inference, batch size is one.
         '''
@@ -237,55 +195,32 @@ class LLaMa_reader(torch.nn.Module):
         if streamer:
             streamer = TextStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
         else:
-            streamer=None
+            streamer = None
         tokens = self.tokenizer(message, padding=True ,truncation=True,return_tensors='pt')
-        ids=tokens.input_ids.to(self.model.device)
-        masks=tokens.attention_mask.to(self.model.device)
-        message_len=ids.shape[1]
-
-        if test:#for testing encoder output
-            print(tokens)
-            B=1
-            n=10
-            
-            num_heads = self.model.config.num_key_value_heads
-            num_layers = self.model.config.num_hidden_layers
-            num_dims = self.model.config.hidden_size//num_heads
-            encoder_output=torch.zeros([num_layers,2,B,num_heads,n,num_dims], dtype=torch.float16).to(self.model.device)
-            encoder_masks = torch.zeros([B,n], dtype=torch.long).to(self.model.device)
-
-        #concat document mask
-        if encoder_output is not None:
-            attention_mask = torch.cat([encoder_masks, masks],dim=-1)
-            position_ids = torch.arange(ids.shape[1]).tile([ids.shape[0],1])
-            # position_ids=None
-
-            #need forward first because generate will only use last ids
-            output=self.model.forward(input_ids = ids[:,:-1],
-                                        attention_mask=attention_mask[:,:-1],
-                                        position_ids = position_ids[:,:-1],
-                                        past_key_values = encoder_output,
-                                        use_cache=True )
-
-            past_key_values = output.past_key_values
-        else:
-            attention_mask = masks
-            past_key_values = None
-            position_ids=None
-
-
-        generate_ids = self.model.generate(input_ids = ids,
-                                           attention_mask = attention_mask,
-                                           past_key_values = past_key_values,
-                                           use_cache=True,
-                                           max_new_tokens=max_new_tokens,
-                                           streamer=streamer,
-                                           **self.generate_config)
-
-        output = self.tokenizer.decode(generate_ids[0][ids.shape[1]:],skip_special_tokens=True)
+        tokens = tokens.to(self.model.device)
+        
+        self._set_prefix(prefix)
+        self.model.generation_config.stop_strings.extend(stop_strings)
+        outputs = self.model.generate(**tokens,
+                                        streamer=streamer,
+                                        max_new_tokens=max_new_tokens,
+                                        past_key_values = cache,
+                                        **self.generate_config)
+        
+        [self.model.generation_config.stop_strings.pop(-1) for _ in range(len(stop_strings))]
+        self._del_prefix(prefix)
+        output = self.tokenizer.batch_decode(outputs[:,tokens.input_ids.shape[1]:],skip_special_tokens=True)
         self.chat_history.append([message, output])
         return output
-
+    def _set_prefix(self, prefix):
+        
+        if prefix is not None:
+            for par, p in zip(self.model._parents['Enc'], prefix):
+                setattr(getattr(par, self.module_name), "adaption_prompt", p)
+    def _del_prefix(self, prefix):
+        if prefix is not None:
+            for par in self.model._parents['Enc']:
+                delattr(getattr(par, self.module_name), "adaption_prompt")
 
 if __name__=="__main__":
     inferencer = LLaMa_reader("TheBloke/Llama-2-13B-chat-GPTQ")#TaiwanLLaMaGPTQ("weiren119/Taiwan-LLaMa-v1.0-4bits-GPTQ")

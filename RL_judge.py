@@ -20,7 +20,7 @@ def doc_templete(doc:list[str]):
     return  '\n\n'.join(doc)
 def templete(doc_list:list[str], query:str, answer:str)->tuple[str]:
     doc_list = doc_templete(doc_list)
-    prompt = f'''<<SYS>>\n This is the searched knowledge: [KNOW] {doc_list} [\KNOW]
+    prompt = f'''<<SYS>>\n This is the searched knowledge: [KNOW] {doc_list} [/KNOW]
     Please answer user questions based on the above knowledge\n<</SYS>>
     \n [INST] User: {query.strip()} [/INST] Assistant: '''
     return prompt, prompt + answer
@@ -30,6 +30,7 @@ def prepare_QA_token(tokenizer, doc:list[list[str]], texts:list[str], targets:li
     '''
     
     unlabel, cat_qa = zip(*[templete(doc_list, q, a) for doc_list, q,a in zip(doc, texts, targets)])
+    question_str = unlabel
     unlabel = tokenizer(text=unlabel).input_ids
     # print(max([len(s) for s in unlabel]))
     tokens = tokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=128, truncation =True,)
@@ -37,7 +38,7 @@ def prepare_QA_token(tokenizer, doc:list[list[str]], texts:list[str], targets:li
     for i in range(len(texts)):
         tokens['labels'][i, :len(unlabel[i])]=-100
     tokens['labels'][tokens['attention_mask']==0]=-100
-    return tokens
+    return tokens, question_str
 
 def state_template(query:list[str], generation:list[str], doc:list[str]):
     context = [f'''**Document Context**:
@@ -68,21 +69,19 @@ if __name__=="__main__":
     
     cluster_config=config["cluster_config"]
     cluster = cluster_builder(k=cluster_config["k"])
-    cluster.load('05_02_19_08')
-    # pre compute embbeding
+    cluster.load('05_29_14_30')
 
     # init module
     # encoder:torch.Module
     print('Loading LLM')
     adapter_layers=8
     LM = LLaMa_reader("MediaTek-Research/Breeze-7B-Instruct-v0_1", device, adapter_layers=adapter_layers)
-    num_heads = LM.model.config.num_key_value_heads
-    num_dims = LM.model.config.hidden_size//LM.model.config.num_attention_heads
+    num_dims = LM.model.config.hidden_size
     # print(LM.model.config)
     
     
     print('Initialize KnowEnc...')
-    Encoder=KnowEncoder(adapter_layers, num_heads, num_dims, config['train_config']['head'], num_prefix=4)
+    Encoder=KnowEncoder(adapter_layers, num_dims, config['train_config']['head'], num_prefix=16)
     pretrain_Encoder:dict = torch.load('save/LEX_MAE_retriever_loss_6.8032.pt', map_location='cpu')['dec_model_state_dict']
     for k in [*pretrain_Encoder.keys()]:
         if 'predictions' not in k:
@@ -93,20 +92,20 @@ if __name__=="__main__":
     Encoder.model.load_state_dict(pretrain_Encoder, assign=True)
     Encoder.to(device)
     del pretrain_Encoder
-    Enc_optim = torch.optim.AdamW(Encoder.parameters(), lr = config['train_config']['enc_lr'])
+    Enc_optim = torch.optim.AdamW([*Encoder.parameters()]+[p for p in LM.model.parameters() if p.requires_grad], lr = config['train_config']['enc_lr'])
     
     print('testing prefix tuning...')
-    prefix, prefix_masks = Encoder.forward(['hello'], k = 1, dtype=torch.float16, device = device)
+    prefix = Encoder.forward(['hello'], k = 1, dtype=torch.float16, device = device)
     tokens = LM.tokenizer(['world'], return_tensors='pt').to(device)
-    print(LM.forward(**tokens, prefix = prefix).shape)
-
+    print(LM.forward(**tokens, prefix = prefix).logits.shape)
+    print(LM.generate(["Hello, I'm", "Transformer is a framwork in NLP"], max_new_tokens=32, prefix = prefix))
 
     # init retriever
 
     print('Initilize retriever')
     lex_MAE_retriver=lex_retriever()
     lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever904.pt', map_location='cpu')['enc_model_state_dict'], assign=True)
-    data=torch.load('data/data_reduced_10000000.pt') ## shape:(N,d)
+    data=torch.load('data/data_reduced_2000000.pt') ## shape:(N,d)
     retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
     retriever.to(device)
     retriever.model.to(device)
@@ -115,7 +114,7 @@ if __name__=="__main__":
     
     
     max_epoch = 10
-    num_retrieve=4
+    num_retrieve=1
     num_neg=16
     num_RL_update = 8
 
@@ -123,7 +122,7 @@ if __name__=="__main__":
     print('Loading dataset...')
     data_path='data/cleandata.pt'
     dataset=NQADataset(data_path=data_path)
-    # dataset.data=dataset.data[:4]*10000
+    # dataset.data=dataset.data[:5]*10000
     loader = DataLoader(dataset, batch_size = 16, shuffle=True)
     
     ma_loss=10
@@ -135,56 +134,87 @@ if __name__=="__main__":
         stream = torch.cuda.current_stream()
         for q, target in train_bar:
             B = len(q)
-            iter+=1
             
             
             # send to gpu to retrieval loop
             doc_set = []
+            # a = Agent(q, d, y)
+            action=['retrieve', 'generate']*5
+            st={"Q":q, "A":target, "y": ['']*len(q)}
+            for t in range(4):
+                st_ = st
+                a=action[t]
+                match a:
+                    case 'retrieve':
+                        with torch.no_grad():
+                            dt, zt = retriever.retrieve(q, k=num_retrieve, num_search=4)# [B, neg, n] [B, neg, 30522]
+                            # pos neg pair reshape
+                            doc_set = dt
+                            doc_set = doc_set.reshape([-1, doc_set.shape[-1]])#(B*k, n)
+                            st_['d'] = doc_set
+
+                    case 'generate':
+                        # feed doc into KnowEnc to get prefix
+                        if config['train_config']['use_prefix']:
+                            mask = generate_mask(st['d'], Encoder.tokenizer.pad_token_id)
+                            tokens = tensor_retuen_type(input_ids = st_['d'], attention_mask = mask).to(device)
+                            prefix = Encoder.forward(tokens, k = num_retrieve, dtype=torch.float16)
+                            del tokens
+                        else:
+                            prefix = None
+                        # QA pre-process
+                        tokens, question_str = prepare_QA_token(LM.tokenizer, [[]]*B, q, target)
+                        tokens = tokens.to(device)
+                        labels = tokens['labels']
+                        
+                        
+                        # !!!LLM prefix tuning forward, loss and reward!!!
+                        # y, loss = LM.forward(**tokens, prefix=prefix)
+                        # del y
+                        LM_output = LM.forward(**tokens, prefix=prefix)
+                        loss = LM_output.loss
+                        del LM_output.logits
+                        reward = -loss.detach()# temperaly, (B)
+                        loss = loss.mean()
+                        prefix[0].retain_grad()
+                        if config['train_config']['use_prefix']:
+                            Enc_optim.zero_grad()
+                            loss.backward()
+                            Enc_optim.step()
+
+                        
+                        cat_input = [a+b+' ' for a,b in zip(question_str, st_['y'])]
+                        # print('cat input',cat_input)
+                        yt_ = LM.generate(cat_input, prefix=prefix, stop_strings=['.'])
+                        
+                        st_['y'] = [a+' '+b for a,b in zip(st_['y'], yt_)]
+                    case _:
+                        pass
+                st = st_
+            # END of T
+                    
+
+                
+
             
-            with torch.no_grad():
-                dt, zt = retriever.retrieve(q, k=num_retrieve, num_search=4)# [B, neg, n] [B, neg, 30522]
             # policy.to('cpu')
             # retriever.to('cpu')
             
-            # pos neg pair reshape
-            doc_set = dt
-            doc_set = doc_set.reshape([-1, doc_set.shape[-1]])#(B*k, n)
             
             
             # print(ret.shape, outputs.shape, doc_set.shape)#torch.Size([8, #ret+1, 30522]) torch.Size([8, #ret+1, 30522]) torch.Size([8, #ret, n])
             
             # doc = [retriever.tokenizer.batch_decode(doc_set[i]) for i in range(len(doc_set))]
 
-            # feed doc into KnowEnc to get prefix
-            if config['train_config']['use_prefix']:
-                mask = generate_mask(doc_set, Encoder.tokenizer.pad_token_id)
-                doc_set = tensor_retuen_type(input_ids = doc_set, attention_mask = mask).to(device)
-                prefix, prefix_masks = Encoder.forward(doc_set, k = num_retrieve, dtype=torch.float16)
-            else:
-                prefix, prefix_masks = None, None
-            # QA pre-process
-            tokens = prepare_QA_token(LM.tokenizer, [[]]*B, q, target).to(device)
-            labels = tokens['labels']
-            
-            # print(LM.tokenizer.batch_decode(tokens.input_ids))
-            # labels[labels==-100]=0
-            # print(LM.tokenizer.batch_decode(labels))
-            
-            
-            # !!!LLM prefix tuning forward, loss and reward!!!
-            y, loss = LM.forward(**tokens, prefix=prefix)
-            del y
-            
-            reward = -loss.detach()# temperaly, (B)
-            loss = loss.mean()
-            
-            if config['train_config']['use_prefix']:
-                Enc_optim.zero_grad()
-                loss.backward()
-                Enc_optim.step()
-
             if iter%10==0:
                 train_bar.set_postfix_str(f'len: {tokens.input_ids.shape[-1]}, loss: {loss.item():.3f}, reward: {ma_reward:.2f}')
+            if iter%100==0:
+                with open("moniter.txt", 'a') as f:
+                    f.write(question_str[0] + LM.generate(question_str[0], prefix = [p[0:1] for p in prefix])[0] + '\n')
+                    f.write('Ground Truth: '+ target[0])
+                    
+                
+            iter+=1
             
                     
 

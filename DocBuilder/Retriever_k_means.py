@@ -46,6 +46,7 @@ class cluster_builder(nn.Module):
                 u.append(temp.mean(dim=0))
         u = torch.stack(u)
         u = u*lr + mu*(1-lr)
+        u = F.normalize(u, dim=-1)
         u = top_k_sparse(u, config['cluster_config']['k_sparse']).to_dense()
 
         dis=(u-mu).norm(dim=-1).max()
@@ -96,9 +97,10 @@ class cluster_builder(nn.Module):
                     r[-self.k:]=torch.arange(self.k, device=r.device)
                     mu, dis = self.get_mu(data, r, mu, lr)
                     ele, count = r.unique(return_counts = True)
+                    count:Tensor
                     bar.set_description_str(f'dist:{dis:.4f}, max/min: {max(count)/min(count):.1f}')
                     if max(count)/min(count)>20:
-                        mu[ele[count.argmin()]] = mu[ele[count.argmax()]]+0.001*torch.randn([self.size[1]], device=mu.device)
+                        mu[ele[count.topk(k=5, largest=False).indices]] = mu[ele[count.topk(k=5).indices]]+0.001*torch.randn([5,self.size[1]], device=mu.device)
             del data, r
         del loader
         
@@ -134,6 +136,9 @@ class cluster_builder(nn.Module):
         idx, count = temp_idx.unique(return_counts = True)
         z =  torch.zeros([self.k], dtype=torch.long)
         z[idx] = count
+        self.centers = self.centers[z!=0]
+        z = z[z!=0]
+
         count = z.tolist()
         sort_count = sorted(count)
         print('Maximum cluster:',sort_count[-10:],', minimum cluster:',sort_count[:10], 'All:', count)
@@ -340,8 +345,8 @@ class doc_retriever(torch.nn.Module):
         return retrieved_segs, emb
     
     def forward(self, querys:list[str]):
-        x=self.tokenizer(querys, return_tensors='pt', padding=True ,truncation=True).to(self.model.device)
-        return  self.model(x)
+        x=self.tokenizer(querys, return_tensors='pt', padding=True ,truncation=True).to(self.cluster.centers.device)
+        return  F.normalize(self.model(x), dim=-1)
         
 if __name__=='__main__':
     retriever=doc_retriever()

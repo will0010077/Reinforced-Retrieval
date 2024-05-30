@@ -13,7 +13,7 @@ with open('config.yaml', 'r') as yamlfile:
 config = config['model_config']
 
 class KnowEncoder(torch.nn.Module):
-    def __init__(self, num_layers=40, num_heads=40, dims=128, groups=4, num_prefix = 4):
+    def __init__(self, num_layers=40, dims=4096, groups=4, num_prefix = 4):
         super().__init__()
         if dims % groups !=0:
             raise ValueError(f'Dims must divided by groups')
@@ -21,9 +21,8 @@ class KnowEncoder(torch.nn.Module):
         self.model = BertModel(BertConfig(num_hidden_layers=2))
         self.tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
         self.num_layers=num_layers
-        self.num_heads=num_heads
         self.dims=dims
-        self.encoder_heads=nn.Conv1d(config['embed_dim']*self.num_layers, self.num_heads*self.dims*self.num_layers, kernel_size=1, groups=groups*self.num_layers)
+        self.encoder_heads=nn.Conv1d(config['embed_dim']*self.num_layers, self.dims*self.num_layers, kernel_size=1, groups=groups*self.num_layers)
         
         assert num_prefix<99
         self.num_prefix = num_prefix
@@ -36,15 +35,20 @@ class KnowEncoder(torch.nn.Module):
         '''
         if device is None:
             device = self.model.device
-        if type(x)==list:
+        if isinstance(x,list):
+            assert isinstance(x[0], str)
             x=self.tokenizer(x, return_tensors='pt', padding=True ,truncation=True).to(self.model.device)
         
-        B=x.input_ids.shape[0]//k
-        n=x.input_ids.shape[1]
+        B=x.input_ids.shape[0]//k # bs
+        n=x.input_ids.shape[1] # length
+
+
+        # cat special token for output fixed length of embedding, update attention mask length
         x.input_ids = torch.cat([self.prefix_tokens.tile([B*k,1]), x.input_ids], dim = 1)
         x.attention_mask = torch.cat([torch.ones([B*k, self.num_prefix], device = x.input_ids.device), x.attention_mask], dim = 1)
-        x = {'input_ids':x.input_ids, 'attention_mask':x.attention_mask}
-        y=self.model(**x)
+
+
+        y=self.model(input_ids =x.input_ids, attention_mask = x.attention_mask)
         
         
         y = y.last_hidden_state[:,:self.num_prefix,:]
@@ -54,17 +58,15 @@ class KnowEncoder(torch.nn.Module):
         y = self.encoder_heads.forward(y)#(B*k, 5120*layer, P)
         # print('encoder_heads output:', y.shape)
         y = y.to(dtype)
-        y = y.reshape([B, k, self.num_layers, -1, self.dims, self.num_heads, self.num_prefix])
+        y = y.reshape([B, k, self.num_layers, self.dims, self.num_prefix])
         # print('prefix output:', y.shape)
         
         
-        y = y.permute([2,3,0,5,1,6,4])#(layer, -1, B, head, k, P, dims)
+        y = y.permute([2,0,1,4,3])#(layer, B, k, P, dims)
         # print('before cat output:', y.shape)
-        y = y.reshape([self.num_layers, -1, B, self.num_heads, k*self.num_prefix, self.dims])#(layer, 1, B, head, k*P, dims)
+        y = y.reshape([self.num_layers, B, k*self.num_prefix, self.dims])#(layer, B, k*P, dims)
         y = y.to(device, non_blocking=True)
-        # y = torch.tile(y, [1,2,1,1,1,1])#(layer, 2, B, head, k*P, dims)
-        masks = torch.ones([B, k*self.num_prefix], dtype=torch.long, device=y.device)
-        return y.unbind(), masks
+        return y.unbind()
     
     def mean_pooling(self,token_embeddings, mask):
         token_embeddings = token_embeddings.masked_fill(~mask[..., None].bool(), 0.)

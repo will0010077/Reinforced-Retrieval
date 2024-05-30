@@ -95,7 +95,7 @@ class lex_retriever(torch.nn.Module):
         if mask is None:
             mask=generate_mask(x['input_ids'], self.tokenizer.pad_token_id)
             
-        logits, hidden_state, b= self.model.forward(x, output_low=False)
+        logits, hidden_state, b= self.model.forward(x = x, output_low=False)
 
         if output_soft:
             return torch.softmax(max_pooling(logits, mask), dim=-1)
@@ -111,15 +111,15 @@ class lex_retriever(torch.nn.Module):
         '''
         self.train()
         temp = self.collate([ids[0]])
-        temp['input_ids'] = temp['input_ids'].to(self.model.model.device)
-        feature_shape  = self.forward(temp).shape[1]
+        temp['input_ids'] = temp['input_ids'].to('cuda')
+        feature_shape  = self.forward(x = temp).shape[1]
         feature_list=[]
 
 
         dataloader = DataLoader(ids, batch_size=bs, shuffle=False, collate_fn=self.collate, num_workers=8)
         for i,idx in (bar:=tqdm(enumerate(dataloader),ncols=0,total=len(dataloader))):
-            idx['input_ids'] = idx['input_ids'].to(self.model.model.device)
-            feature  = self.forward(idx)#(bs, d)
+            idx['input_ids'] = idx['input_ids'].to('cuda')
+            feature  = self.forward(x = idx)#(bs, d)
 
             # sparse_feature = [top_k_sparse(v, 128).cpu() for v in feature]
             feature = F.normalize(feature, dim=-1)

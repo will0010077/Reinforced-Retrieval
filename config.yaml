@@ -2,7 +2,7 @@ train_config:
   max_epoch : 6
   spilt : 0.95
   num_samples : null
-  enc_lr : 1.e-5
+  enc_lr : 5.e-5
   lm_lr : 1.e-5
   agent_lr : 0.e-5
   betas: [0.8, 0.998]
@@ -31,25 +31,24 @@ model_config:
 
 cluster_config:
   k: 3000
-  bs: 100000
+  bs: 200000
   lr: 0.5
   tol: 0.05
   num_search: 4
   k_sparse: 64
 
 data_config:
-  num_doc: 10000000
+  num_doc: 200000
   num_samples: 100000
-  windows: 96
-  step: 64
+  windows: 192
+  step: 128
 
 generate_config:
   no_repeat_ngram_size: 6
   do_sample: True
   top_k: 50
-  num_beams: 3
+  num_beams: 1
   bad_words_ids: null
-  max_new_tokens: 1024
 
 
 

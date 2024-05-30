@@ -44,7 +44,7 @@ if __name__ == '__main__':
         qadataset = list(qadataset.load_data())
         print("Dataset Loaded!!")
 
-        Cor_num=multiprocessing.cpu_count()
+        Cor_num = 8
         datastep=len(qadataset)//Cor_num+1
 
         multi_processing = []
@@ -175,8 +175,8 @@ if __name__ == '__main__':
 
     elif sys.argv[1]=="save_embed": # 2hr
         device='cuda'
-        data = dataset.DocumentDatasets('data/segment/segmented_data_', 12)
-
+        data = dataset.DocumentDatasets('data/segment/segmented_data_', 8)
+        print('number of chunks:', len(data))
         num_samples = config['data_config']['num_doc']
         
         # with reduced documents
@@ -196,6 +196,7 @@ if __name__ == '__main__':
         lex_MAE_retriver.to(device)
         load_path = 'save/LEX_MAE_retriever904.pt'
         lex_MAE_retriver.model.load_state_dict(torch.load(load_path, map_location='cpu')['enc_model_state_dict'])
+        # lex_MAE_retriver.model = torch.nn.DataParallel(lex_MAE_retriver.model, device_ids=[0,1])
         print('load weight from',load_path)
         
         feature = lex_MAE_retriver.get_feature(data, 256)
@@ -210,7 +211,7 @@ if __name__ == '__main__':
         # print(torch.load(f'data/data_reduced_{num_samples}.pt'))
     elif sys.argv[1]=="doc_build":
         cluster_config=config["cluster_config"]
-        data= torch.load('data/vecs_reduced_1000000.pt', mmap=True) ## shape:(N,d)
+        data= torch.load('data/vecs_reduced_2000000.pt', mmap=True) ## shape:(N,d)
         print('converting...')
         runer = unbind_sparse(data)
         del data
@@ -222,7 +223,7 @@ if __name__ == '__main__':
         print(len(data))
         print(data[:2])
         cluster = cluster_builder(k=cluster_config["k"])
-        cluster_ids_x, centers = cluster.train(data, epoch=50, bs = cluster_config['bs'], tol=cluster_config['tol'], lr=cluster_config['lr'])
+        cluster_ids_x, centers = cluster.train(data, epoch=10, bs = cluster_config['bs'], tol=cluster_config['tol'], lr=cluster_config['lr'])
         del data
         cluster.build()
         name = cluster.save()
@@ -230,13 +231,13 @@ if __name__ == '__main__':
     elif sys.argv[1]=="test":
         cluster_config=config["cluster_config"]
         cluster = cluster_builder(k=cluster_config["k"])
-        cluster.load('04_23_04_32')
+        cluster.load('05_29_13_29')
 
         lex_MAE_retriver=lex_retriever()
         lex_MAE_retriver.to('cpu')
-        lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever838.pt', map_location='cpu')['enc_model_state_dict'])
+        lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever904.pt', map_location='cpu')['enc_model_state_dict'])
 
-        data=torch.load('data/data_reduced_5000000.pt') ## shape:(N,d)
+        data=torch.load('data/data_reduced_200000.pt') ## shape:(N,d)
         retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
         # retriever.to('cuda')
         # vec = torch.load('data/vecs_reduced_5000000.pt') ## shape:(N,d)
@@ -248,6 +249,10 @@ if __name__ == '__main__':
             
         while True:
             user= input('user:')
+            z = retriever.forward(user)
+            z = top_k_sparse(z, 32)[0]
+            for i, v in sorted(zip(lex_MAE_retriver.tokenizer.convert_ids_to_tokens(z.coalesce().indices()[0]), z.coalesce().values()), key=lambda x:x[1], reverse=True):
+                print(f'{i}:{v:.3f}, ',end='')
             seg, emb = retriever.retrieve(user)
             print(seg.shape)
             print(emb.shape)

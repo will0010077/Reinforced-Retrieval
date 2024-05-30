@@ -12,24 +12,18 @@ import multiprocessing
 from queue import Queue
 import time,os,gc
 
-# Please check cased/uncased, LexMAE use bert-base-uncased
-tokenizer:BertTokenizerFast = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")
+def generate_segments(tokens, window_size, step)-> torch.Tensor:
 
-def generate_segments(text, window_size, step)-> torch.Tensor:
-
-    text=re.sub("(<[/a-z0-9A-Z]*>)",'',string=text.strip())
-    tokens = tokenizer(text, return_tensors='pt').input_ids[0]
-    tokens: torch.Tensor
     segment_list=[]
+    for token in tokens:
+        for i in range(0, max(len(token)-window_size,1), step):
+            segment_data = token[max(0, min(i, len(token)-window_size)):i+window_size]
+            # print(segment_data.shape)
+            if len(segment_data) < window_size:
+                padding = torch.zeros(window_size - len(segment_data), dtype=torch.long)
+                segment_data = torch.cat((segment_data, padding))
+            segment_list.append(segment_data)
 
-    for i in range(0, max(len(tokens)-window_size,1), step):
-        segment_data = tokens[max(0, min(i, len(tokens)-window_size)):i+window_size]
-        # print(segment_data.shape)
-        if len(segment_data) < window_size:
-            # print('\n\nsome thing wrong please check generate seg', len(tokens))
-            padding = torch.zeros(window_size - len(segment_data), dtype=torch.long)
-            segment_data = torch.cat((segment_data, padding))
-        segment_list.append(segment_data)
     segment_list=torch.stack(segment_list)
     return  segment_list
 
@@ -79,10 +73,12 @@ class NQADataset():
 def segmentation(shared_dict, file_lock, shared_int, segment, window_size, step, output_file='app/data/segmented_data.h5'):
     '''load data, segmented to 288 token id, save to h5py'''
 
-    # Token indices sequence length is longer than the specified maximum sequence length for this model (14441966 > 512).
+    # Please check cased/uncased, LexMAE use bert-base-uncased
+    tokenizer:BertTokenizerFast = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")
+    tokenizer.model_max_length = 10**6
     # 將文本分割成token, use tokenizer!!
     first=True
-    max_queue_size = 32
+    max_queue_size = 8
     num_thread = 4
     seg_count=0
     docu_ids=shared_dict
@@ -92,23 +88,33 @@ def segmentation(shared_dict, file_lock, shared_int, segment, window_size, step,
     s2c = Queue()
     terminal_signal = Event()
     # 初始化h5py文件
-        # 創建一個dataset用於保存分割後的片段
-    bar = tqdm(segment)
+    # 創建一個dataset用於保存分割後的片段
+    def c(batch):
+        return list(zip(*batch))
+    bar = tqdm(DataLoader(segment, batch_size=64, collate_fn=c))
     pool=[Thread(target = Write_segment_Buffer, args = (output_file, s2c, output_lock, qlock, terminal_signal)) for _ in range(num_thread)]
     [t.start() for t in pool]
 
-    for text, url  in bar:
+    for texts, urls  in bar:
         with file_lock:
-            if url in docu_ids:
-                shared_int.value+=1
+            valid=[]
+            for i in range(len(texts)):
+                if urls[i] in docu_ids:
+                    shared_int.value+=1
+                else:
+                    docu_ids.update({urls[i]:True})
+                    valid.append(i)
+                    # print(len(docu_ids))
+        urls = [urls[i] for i in range(len(texts)) if i in valid]
+        texts = [texts[i] for i in range(len(texts)) if i in valid]
+        if len(texts)==0:
+            continue
 
-                continue
-            else:
-                docu_ids.update({url:False})
-                # print(len(docu_ids))
-
+        texts = [re.sub("(<[/a-z0-9A-Z]*>)",'', string=t.strip()) for t in texts]
+        tokens = [torch.tensor(i) for i in tokenizer(texts).input_ids]
+       
         if first:
-            segment_data=generate_segments(text, window_size, step)
+            segment_data=generate_segments(tokens, window_size, step)
             try:
                 f=h5py.File(output_file, 'w', fs_strategy = 'page')
                 if 'segments' not in f:
@@ -120,7 +126,7 @@ def segmentation(shared_dict, file_lock, shared_int, segment, window_size, step,
 
         while s2c.qsize() >= max_queue_size:
             time.sleep(0.001)
-        s2c.put(generate_segments(text, window_size, step))
+        s2c.put(generate_segments(tokens, window_size, step))
         bar.set_description_str(f"Process ID:{os.getpid()} Skip: {shared_int.value} Dict length:{len(docu_ids)}")
     terminal_signal.set()
     [t.join() for t in pool]
