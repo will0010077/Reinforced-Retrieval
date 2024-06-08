@@ -97,7 +97,7 @@ if __name__=="__main__":
     print('testing prefix tuning...')
     prefix = Encoder.forward(['hello'], k = 1, dtype=torch.float16, device = device)
     tokens = LM.tokenizer(['world'], return_tensors='pt').to(device)
-    print(LM.forward(**tokens, prefix = prefix).logits.shape)
+    print(LM.forward(tokens, prefix = prefix).logits.shape)
     print(LM.generate(["Hello, I'm", "Transformer is a framwork in NLP"], max_new_tokens=32, prefix = prefix))
 
     # init retriever
@@ -171,7 +171,7 @@ if __name__=="__main__":
                         # !!!LLM prefix tuning forward, loss and reward!!!
                         # y, loss = LM.forward(**tokens, prefix=prefix)
                         # del y
-                        LM_output = LM.forward(**tokens, prefix=prefix)
+                        LM_output = LM.forward(tokens, prefix=prefix)
                         loss = LM_output.loss
                         del LM_output.logits
                         reward = -loss.detach()# temperaly, (B)

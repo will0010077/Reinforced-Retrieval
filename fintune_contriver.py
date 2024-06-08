@@ -126,7 +126,7 @@ class NQADataset(Dataset):
 
         # long_answer=' '.join(sample['document_text'].split()[a['start_token']:a['end_token']])
 
-        return q,la#str(sample['question_text']),long_answer#text_without_tags
+        return q, la#str(sample['question_text']),long_answer#text_without_tags
 
 
 tokenizer = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")

@@ -1,5 +1,6 @@
 from typing import Dict, List
-from transformers import AutoTokenizer,TextStreamer,TextIteratorStreamer,AutoModelForCausalLM
+from transformers import TextStreamer,AutoTokenizer,AutoModelForCausalLM, LlamaConfig, LlamaForCausalLM, GenerationConfig
+
 # from auto_gptq import AutoGPTQForCausalLM
 import torch
 from torch import Tensor, nn
@@ -8,6 +9,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import yaml
 import peft
+from peft.utils import _freeze_adapter, _get_submodules
+from LM.Knowledge_encoder import KnowEncoder
 from peft.tuners.adaption_prompt.config import AdaptionPromptConfig, TRANSFORMERS_MODEL_CONFIG, prepare_config
 import math
 
@@ -24,6 +27,7 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
     def __init__(self, *args, **kargs):
         super().__init__( *args, **kargs,)
         del self.adaption_prompt
+        self.adaption_gate.data = self.adaption_gate.data.float() # change it to float32 to avoid NaN
     # overide
     def forward(self, **kwargs):
         """
@@ -37,7 +41,6 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
         """
         if kwargs.get("output_attention", False):
             raise NotImplementedError("output_attention is not currently supported.")
-
         output, _, past_key_value = self.model(**kwargs)
         if not hasattr(self, "adaption_prompt"):
             return output, None, past_key_value
@@ -87,7 +90,7 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
         )
         # Upcast attention to fp32
         # (bsz, num_heads, q_len, adapter_len)
-        scores = self.adaption_gate.tanh() * F.softmax(scores, dim=-1, dtype=torch.float32).to(previous_dtype)
+        scores = (self.adaption_gate * F.softmax(scores, dim=-1, dtype=torch.float32)).to(previous_dtype)
         # (bsz, q_len, num_heads * head_dim)
         adapter_output = torch.matmul(scores, adapter_v).transpose(1, 2).reshape(bsz, q_len, -1)
 
@@ -102,9 +105,80 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
         output = output.to(previous_dtype)
         return output, None, past_key_value
 
-class EncoderAdaptedModel(peft.AdaptionPromptModel):
-    def __init__(self, *args, **kargs):
-        super().__init__(*args, **kargs)
+class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
+
+    def __init__(self, LM:AutoModelForCausalLM, Enc:KnowEncoder, configs: Dict, adapter_name: str):
+        
+        nn.Module.__init__(self)
+        self.model = LM
+        self.Enc = Enc
+        # Store adapter configs by name.
+        self.peft_config: Dict[str, AdaptionPromptConfig] = {}
+        # Store lists of the parents of the affected attention modules by adapter name.
+        # We keep references to the parents so we can swap the adapters in-and-out of the model.
+        self._parents: nn.ParameterDict[str, List[nn.Module]] = nn.ParameterDict()
+        # Store lists of cached AdaptedAttention modules by name.
+        self._cached_adapters: Dict[str, List] = {}
+        # The name of the currently active adapter.
+        self._active_adapter = None
+        # Whether the adapter is enabled.
+        self._enabled = True
+        # self.forward = self.model.forward # Fuck this!!!
+        self.add_adapter(adapter_name, configs[adapter_name])
+        self._mark_only_adaption_prompts_as_trainable(self.model)
+        self.module_name = prepare_config(peft.AdaptionPromptConfig, self.model).target_modules
+
+
+    def forward(self, *args, Doc_tokens = None, k = 1, **kwargs):
+        prefix = self.Enc.forward(Doc_tokens)
+        self._set_prefix(prefix)
+        output = self.model.forward(*args, **kwargs)
+        self._del_prefix(prefix)
+        return output
+    
+    def generate(self, *args, prefix = None, **kwargs):
+        
+
+        self._set_prefix(prefix)
+        output = self.model.generate(*args, **kwargs)
+        self._del_prefix(prefix)
+        return output
+    
+    def add_adapter(self, adapter_name: str, config: AdaptionPromptConfig) -> None:
+        """Add an adapter with the given name and config."""
+        config = prepare_config(config, self.model)
+        if adapter_name in self.peft_config:
+            raise ValueError(f"Adapter with name '{adapter_name}' already exists.")
+
+        parents = nn.ParameterList()
+        for name, _ in self.model.named_modules():
+            if name.endswith(config.target_modules):
+                par, _, _ = _get_submodules(self.model, name)
+                parents.append(par)
+        if len(parents) < config.adapter_layers:
+            raise ValueError(
+                f"Config specifies more adapter layers '{config.adapter_layers}'"
+                f" than the model has '{len(parents)}'."
+            )
+        # Note that if the target modules are not in Sequential, ModuleList, or
+        # some other PyTorch ordered container, the behavior is undefined as we
+        # assume here that the order of the modules is the same as the order of
+        # the transformer decoder layers.
+        parents = parents[-config.adapter_layers :]
+        self._parents[adapter_name] = parents
+
+        # It is only None during initialization.
+        # If it is disabled, we don't have to remove the modules.
+        if self._active_adapter is not None and self._enabled:
+            self._remove_adapted_attentions(self._active_adapter)
+        self._active_adapter = adapter_name
+        self.peft_config[adapter_name] = config
+        self._create_adapted_attentions(config, parents)
+        if not self._enabled:
+            self._remove_adapted_attentions(self._active_adapter)
+
+        if config.inference_mode:
+            _freeze_adapter(self.model, adapter_name)
 
     def _create_adapted_attentions(self, config: AdaptionPromptConfig, parents: List[nn.Module]) -> None:
         """Wrap LlamaAttention modules with newly created AdaptedAttention modules."""
@@ -116,10 +190,21 @@ class EncoderAdaptedModel(peft.AdaptionPromptModel):
             )
             setattr(par, config.target_modules, attn)
         
+    def _set_prefix(self, prefix):
+        
+        if prefix is not None:
+            for par, p in zip(self._parents['Enc'], prefix):
+                setattr(getattr(par, self.module_name), "adaption_prompt", p)
+
+    def _del_prefix(self, prefix):
+        if prefix is not None:
+            for par in self._parents['Enc']:
+                delattr(getattr(par, self.module_name), "adaption_prompt")
+
 class LLaMa_reader(torch.nn.Module):
-    def __init__(self, model_dir, device, adapter_layers=8):
+    def __init__(self, model_dir, device, token, from_pretrained=True):
         super().__init__()
-        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, lstrip=False, token='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')
+        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, lstrip=False, token=token)
         self.tokenizer.model_max_length=2048
         self.tokenizer.padding_side='left'
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
@@ -128,23 +213,22 @@ class LLaMa_reader(torch.nn.Module):
         self.eos=self.tokenizer.eos_token
 
         self.generate_config=config['generate_config']
-        # self.model = AutoGPTQForCausalLM.from_quantized(model_dir,
-        #     trust_remote_code=False,
-        #     device_map="auto",
-        #     # use_triton=False,
-        #     # use_cache=True,
-        #     # trainable=True,
-        #     )
-        self.model=AutoModelForCausalLM.from_pretrained(model_dir, token='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', device_map=device, use_cache=True, torch_dtype=torch.float16)
+        if from_pretrained:
+            self.model=AutoModelForCausalLM.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.float16)
+        else:
+            LM_config = LlamaConfig.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.float16)
+            LM_config.intermediate_size=768
+            LM_config.hidden_size = 768
+            LM_config.num_hidden_layers=8
+            self.model=LlamaForCausalLM(LM_config).to(torch.float16)
+            self.model.generation_config = GenerationConfig.from_pretrained(model_dir)
+        self.dtype = self.model.config.torch_dtype
         # print(self.model)
         self.model.generation_config.pad_token_id = self.tokenizer.pad_token_id
         self.model.generation_config.stop_strings=[]
-        self.model.train(False)
+        self.model.train(True)
         self.model.requires_grad_(False)
-
-        peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=adapter_layers, adapter_len=1)}
-        self.model = EncoderAdaptedModel(self.model, configs = peft_configs, adapter_name='Enc')
-        self.module_name = prepare_config(peft_configs['Enc'], self.model).target_modules
+        self.config = self.model.config
         # for par in self.model._parents['Enc']:
         #     getattr(par, self.module_name).adaption_gate.requires_grad_(True)
         # for p in self.model.parameters():
@@ -152,42 +236,47 @@ class LLaMa_reader(torch.nn.Module):
         self.chat_history = []
         self.system_prompt = ''
         self.external=None
-
-    def forward(self, *args, prefix=None, **kwargs)->tuple[Tensor, Tensor]:
+    @property
+    def device(self):
+        return self.model.device
+    def forward(self, tokens)->tuple[Tensor, Tensor]:
         '''
         forward function for teacher forcing\\
         the shape of ids, target, masks is (B,n)\\
-        the shape of encoder_output is (B, 40, 2, 40, nd, 128), encoder_masks is (B,nd)\\
+        the shape of prefix is tuple[(B, n, dim)]\\
         '''
 
 
-        labels = kwargs.get('labels', None)
+        labels = tokens.get('labels', None)
         if labels is not None:
-            del kwargs['labels']
-
-
-        self._set_prefix(prefix)
-        output = self.model(**kwargs)
-        self._del_prefix(prefix)
+            del tokens['labels']
+        # print(self.model.model.model.embed_tokens.weight.device, tokens.input_ids.device, prefix[0].device)
+        
+        output = self.model(**tokens)
         lm_logits:Tensor = output.logits
         labels:Tensor
-        del output.past_key_values
+        del output.past_key_values, output.logits
+        loss=None
         if labels is not None:
             labels = labels
             # Shift so that tokens < n predict n
+
             shift_logits = lm_logits[..., :-1, :]
+            temp = shift_logits
+            labels[tokens['attention_mask']==0]=-100
             shift_labels = labels[..., 1:]
             # Flatten the tokens
             loss = -torch.log_softmax(shift_logits, dim=-1)[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
             mask = shift_labels==-100
             loss = loss.masked_fill_(mask, 0)
-            output.loss = loss.sum(-1)/(~mask).sum(-1)
+            
+            loss = loss.sum(-1)/(~mask).sum(-1)
 
         
-        return output
+        return output, loss
 
     @torch.inference_mode()
-    def generate(self, message, cache = None,  max_new_tokens = 1024, streamer=False, prefix=None, stop_strings=[]):
+    def generate(self, message, cache = None,  max_new_tokens = 1024, streamer=False, stop_strings=[]):
         '''
         for inference, batch size is one.
         '''
@@ -199,7 +288,6 @@ class LLaMa_reader(torch.nn.Module):
         tokens = self.tokenizer(message, padding=True ,truncation=True,return_tensors='pt')
         tokens = tokens.to(self.model.device)
         
-        self._set_prefix(prefix)
         self.model.generation_config.stop_strings.extend(stop_strings)
         outputs = self.model.generate(**tokens,
                                         streamer=streamer,
@@ -208,19 +296,12 @@ class LLaMa_reader(torch.nn.Module):
                                         **self.generate_config)
         
         [self.model.generation_config.stop_strings.pop(-1) for _ in range(len(stop_strings))]
-        self._del_prefix(prefix)
-        output = self.tokenizer.batch_decode(outputs[:,tokens.input_ids.shape[1]:],skip_special_tokens=True)
-        self.chat_history.append([message, output])
+        output = self.tokenizer.batch_decode(outputs,skip_special_tokens=True)
+        # self.chat_history.append([message, output])[:,tokens.input_ids.shape[1]:]
         return output
-    def _set_prefix(self, prefix):
-        
-        if prefix is not None:
-            for par, p in zip(self.model._parents['Enc'], prefix):
-                setattr(getattr(par, self.module_name), "adaption_prompt", p)
-    def _del_prefix(self, prefix):
-        if prefix is not None:
-            for par in self.model._parents['Enc']:
-                delattr(getattr(par, self.module_name), "adaption_prompt")
+    
+
+
 
 if __name__=="__main__":
     inferencer = LLaMa_reader("TheBloke/Llama-2-13B-chat-GPTQ")#TaiwanLLaMaGPTQ("weiren119/Taiwan-LLaMa-v1.0-4bits-GPTQ")

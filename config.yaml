@@ -2,15 +2,25 @@ train_config:
   max_epoch : 6
   spilt : 0.95
   num_samples : null
-  enc_lr : 5.e-5
   lm_lr : 1.e-5
   agent_lr : 0.e-5
   betas: [0.8, 0.998]
   weight_decay : 0.01
   topk : 1
-  head : 2
   load_E : True
   use_prefix : True
+
+Enc_config:
+  enc_lr : 1.e-4
+  groups : 1
+  num_layers : 8
+  num_prefix : 8
+
+Enc_size_config:
+  num_hidden_layers: 6
+  num_attention_heads: 8
+  hidden_size: 512
+  intermediate_size: 1024
 
 lex:
   pre_lr : 5.e-5
@@ -26,8 +36,6 @@ loader_config:
   persistent_workers : True
 
 
-model_config:
-  embed_dim: 768
 
 cluster_config:
   k: 3000
@@ -45,8 +53,8 @@ data_config:
 
 generate_config:
   no_repeat_ngram_size: 6
-  do_sample: True
-  top_k: 50
+  do_sample: False
+  top_k: 1
   num_beams: 1
   bad_words_ids: null
 

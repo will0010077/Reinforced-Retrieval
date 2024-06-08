@@ -18,7 +18,6 @@ import yaml
 
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
-model_config = config['model_config']
 
 # seed = config['seed']
 # torch.manual_seed(seed)

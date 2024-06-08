@@ -4,6 +4,7 @@ from torch import Tensor
 from tqdm import tqdm
 import multiprocessing as mp
 import time
+from collections import UserDict
 def top_k_sparse(x:Tensor, k:int, vec_dim:int=-1):
     '''
     x: Tensor
@@ -191,31 +192,36 @@ class unbind_sparse:
 
 
 
-class tensor_retuen_type(dict):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-    def __getattr__(self, name: str) -> Tensor:
 
-        if name in self.keys():
-            return self[name]
-        
-        if name=='device':
-            return next(iter(self.values())).device
-        def f(*args, **kwargs):
-            return tensor_retuen_type(**{i:getattr(self[i], name)(*args, **kwargs) for i in self})
-        return f
-    
+class tensor_retuen_type(dict):
+    def __getattr__(self, item: str)->Tensor:
+        try:
+            return self[item]
+        except KeyError:
+            raise AttributeError
+    def to(self, *args, **kwargs):
+        return tensor_retuen_type(**{i:self[i].to(*args, **kwargs) for i in self})
     def __setattr__(self, name: str, value: torch.Any) -> None:
-        self[name] = value
-        
-    def __getstate__(self,):
+        self.__setitem__(name, value)
+    def __setitem__(self, key, value:Tensor) -> None:
+        if self.device is not None:
+            value = value.to(self.device)
+        return super().__setitem__(key, value)
+    def __getstate__(self):
         return self
+
     def __setstate__(self, state):
-        self.update(state)
+        super().__init__(state)
+    
     def __len__(self,):
         return len([*self.values()][0])
-        
+    @property
+    def device(self):
+        if len(self.keys())>0:
+            return next(iter(self.values())).device
+        else:
+            return None
+        raise RuntimeError()
     
 
 def Masking(x:Tensor, P:float, tokenizer, all_mask:Tensor=None)->tensor_retuen_type:
@@ -234,3 +240,12 @@ def Masking(x:Tensor, P:float, tokenizer, all_mask:Tensor=None)->tensor_retuen_t
     x[rand_mask] = torch.randint(999, tokenizer.vocab_size, size = x[rand_mask].shape, dtype=x.dtype, device=x.device)
 
     return tensor_retuen_type(input_ids = x, masks = all_mask.long(), attention_masks = generate_mask(x, tokenizer.pad_token_id))
+
+if __name__=="__main__":
+    t = tensor_retuen_type(a=torch.rand([4,16]), b=torch.rand([4,16]))
+    t_=tensor_retuen_type()
+    t = t.to('cuda')
+    t.c = torch.rand([4,16])
+    t['d'] = torch.rand([4,16])
+    print(t)
+    print(t.device)
