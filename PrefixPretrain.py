@@ -22,10 +22,9 @@ import peft
 import os
 token = "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"
 # model_dir = "MediaTek-Research/Breeze-7B-Instruct-v0_1"
-model_dir = "/usr/model/EncLM/"
+model_dir = "meta-llama/Llama-2-7b-chat-hf"
 bert_dir = "huggingface/bert"
 LM_dir = "huggingface/llama2"
-model_dir = "meta-llama/Llama-2-7b-chat-hf"
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 # torch.autograd.set_detect_anomaly(True)
@@ -124,11 +123,10 @@ def training(rank, world_size, max_epoch, model, loader):
             if not config['train_config']['use_prefix']:
                 a_tokens = None
             
-            ref_logp,(LM_output, loss) = model.forward(tokens, Doc_tokens = a_tokens)
-            LM_output = LM_output.logits
-            LM_output = torch.log_softmax(LM_output, dim=-1)
+            ref_logp, (LM_output, loss) = model.forward(tokens, Doc_tokens = a_tokens)
             kl = F.kl_div(LM_output, ref_logp, log_target=True, reduction="batchmean")
-            loss = loss.mean() + kl.mean()
+            loss = loss.mean()
+            loss += kl.mean() * 0.5
 
 
             if config['train_config']['use_prefix']:
@@ -140,12 +138,12 @@ def training(rank, world_size, max_epoch, model, loader):
             ma_loss = ma_loss*0.98 + 0.02*(loss if not torch.isnan(loss) else ma_loss)
             if rank==0 and i-li>=50:
                 li=i
-                print(f', loss: {ma_loss.item():.3f}/{loss.item():.3f}, KL: {kl.mean().item():.3f}', flush=True)
+                print(f'epoch {epoch}, iter {i:3d}[loss: {ma_loss.item():.3f}/{loss.item():.3f}, KL: {kl.mean().item():.3f}', flush=True)
         stream.synchronize()
         dist.barrier()
         if rank==0:
-            torch.save(model.module.state_dict(), "/usr/model/EncLM.pt")
-            torch.save(optim.state_dict(), "/usr/model/EncLM_optim.pt")
+            torch.save(model.module.state_dict(), "save/EncLM.pt")
+            torch.save(optim.state_dict(), "save/EncLM_optim.pt")
         dist.barrier()
         
     cleanup()
@@ -157,7 +155,7 @@ def main():
     # init module
     # encoder:torch.Module
     print('Loading LLM')
-    LM = LLaMa_reader(model_dir, 'cpu', token = token, from_pretrained=True)
+    LM = LLaMa_reader(LM_dir, 'cpu', token = token, from_pretrained=True)
     dtype = LM.dtype
     num_dims = LM.model.config.hidden_size
     # print(LM.model.config)
@@ -167,15 +165,15 @@ def main():
     print(f'Initialize EncTunedLM...')
     peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=config['Enc_config']['num_layers'], adapter_len=1)}
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
-    if True:
+    if False:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        LM.load_state_dict(torch.load("/usr/model/EncLM.pt", map_location='cpu'))
+        LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
     max_epoch = 10
     print('Loading dataset...')
     data_path = "data/cleandata.pt"
     dataset = NQADataset(data_path=data_path)
-    loader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
+    loader = DataLoader(dataset, batch_size=48, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
     
     mp.spawn(training,
         args=(world_size, max_epoch, LM, loader),

@@ -131,15 +131,14 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
 
     def forward(self, *args, Doc_tokens = None, k = 1, **kwargs):
 
-        with torch.no_grad():
-            ref_output = self.model.forward(*args, **kwargs)
-            ref_logp = torch.log_softmax(ref_output.logits, dim=-1).to(torch.bfloat16)
-            del ref_output
-
         prefix = self.Enc.forward(Doc_tokens)
         self._set_prefix(prefix)
         output = self.model.forward(*args, **kwargs)
         self._del_prefix(prefix)
+        with torch.no_grad():
+            ref_logp, loss = self.model.forward(*args, **kwargs)
+            ref_logp = ref_logp.to(torch.bfloat16)
+
         return ref_logp, output
     
     def generate(self, *args, prefix = None, **kwargs):
@@ -252,34 +251,32 @@ class LLaMa_reader(torch.nn.Module):
         the shape of prefix is tuple[(B, n, dim)]\\
         '''
 
-
-        labels = tokens.get('labels', None)
-        if labels is not None:
-            del tokens['labels']
         # print(self.model.model.model.embed_tokens.weight.device, tokens.input_ids.device, prefix[0].device)
         
         output = self.model(**tokens)
         lm_logits:Tensor = output.logits
+        logp = torch.log_softmax(lm_logits, dim=-1)
         labels:Tensor
-        del output.past_key_values
+        del output.past_key_values, output.logits
         loss=None
+
+        labels = tokens.get('labels', None)
         if labels is not None:
-            labels = labels
+            del tokens['labels']
             # Shift so that tokens < n predict n
 
-            shift_logits = lm_logits[..., :-1, :]
-            temp = shift_logits
+            shift_logp = logp[..., :-1, :]
             labels[tokens['attention_mask']==0]=-100
             shift_labels = labels[..., 1:]
-            # Flatten the tokens
-            loss = -torch.log_softmax(shift_logits, dim=-1)[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
+            
+            loss = -shift_logp[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
             mask = shift_labels==-100
             loss = loss.masked_fill_(mask, 0)
             
             loss = loss.sum(-1)/(~mask).sum(-1)
 
         
-        return output, loss
+        return logp, loss
 
     @torch.inference_mode()
     def generate(self, message, cache = None,  max_new_tokens = 1024, streamer=False, stop_strings=[]):
