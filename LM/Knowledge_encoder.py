@@ -11,7 +11,8 @@ import yaml
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 config = config['Enc_size_config']
-tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
+bert_dir = "huggingface/bert"
+tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
 # token = tokenizer.convert_ids_to_tokens(torch.arange(1000)) #998-104
 class KnowEncoder(torch.nn.Module):
     def __init__(self, num_layers, dims, groups, num_prefix, dtype=torch.float16, **kwargs):
@@ -20,7 +21,7 @@ class KnowEncoder(torch.nn.Module):
             raise ValueError(f'Dims must divided by groups')
         
         self.model = BertModel(BertConfig(**config))
-        self.tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
+        self.tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
         self.num_layers=num_layers
         self.dims=dims
         self.dtype=dtype

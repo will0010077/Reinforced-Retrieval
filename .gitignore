@@ -5,3 +5,4 @@ __pycache__
 *.zip
 data/
 save/
+huggingface/

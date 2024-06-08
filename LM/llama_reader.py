@@ -130,11 +130,17 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
 
 
     def forward(self, *args, Doc_tokens = None, k = 1, **kwargs):
+
+        with torch.no_grad():
+            ref_output = self.model.forward(*args, **kwargs)
+            ref_logp = torch.log_softmax(ref_output.logits, dim=-1).to(torch.bfloat16)
+            del ref_output
+
         prefix = self.Enc.forward(Doc_tokens)
         self._set_prefix(prefix)
         output = self.model.forward(*args, **kwargs)
         self._del_prefix(prefix)
-        return output
+        return ref_logp, output
     
     def generate(self, *args, prefix = None, **kwargs):
         
@@ -255,7 +261,7 @@ class LLaMa_reader(torch.nn.Module):
         output = self.model(**tokens)
         lm_logits:Tensor = output.logits
         labels:Tensor
-        del output.past_key_values, output.logits
+        del output.past_key_values
         loss=None
         if labels is not None:
             labels = labels

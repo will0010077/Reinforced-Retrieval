@@ -2,6 +2,7 @@ import sys
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torch.multiprocessing as mp
 import torch.distributed as dist
@@ -22,6 +23,8 @@ import os
 token = "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"
 # model_dir = "MediaTek-Research/Breeze-7B-Instruct-v0_1"
 model_dir = "/usr/model/EncLM/"
+bert_dir = "huggingface/bert"
+LM_dir = "huggingface/llama2"
 model_dir = "meta-llama/Llama-2-7b-chat-hf"
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
@@ -31,7 +34,7 @@ with open('config.yaml', 'r') as yamlfile:
 class collate():
     def __init__(self,):
         
-        self.datatokenizer:AutoTokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
+        self.datatokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
         self.LMtokenizer = AutoTokenizer.from_pretrained(
             model_dir, use_fast=True, lstrip=False, 
             token='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')
@@ -64,7 +67,6 @@ class collate():
     
     def templete(self, query:str, answer:str ='')->tuple[str]:
         Role = ["system", "user", "assistant"]
-        answer = '.'.join(answer.split('.')[:3])+'.'
         query, answer = query.strip(), answer.strip()
         messages = [
             {"role": "system", "content": "This is the searched knowledge: [KNOW]  [/KNOW] Please answer user questions based on the above knowledge\n"},
@@ -102,16 +104,17 @@ def training(rank, world_size, max_epoch, model, loader):
 
     iter_step = len(loader)*max_epoch
     warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.02))
-    decay =  torch.optim.lr_scheduler.PolynomialLR(optim, total_iters=int(iter_step*0.98)+1, power=1.5)
+    decay =  torch.optim.lr_scheduler.PolynomialLR(optim, total_iters=int(iter_step*1.3), power=1.5)
     scheduler = torch.optim.lr_scheduler.SequentialLR(optim, [warm, decay], [warm.total_iters])
     # torch.optim.lr_scheduler.CosineAnnealingWarmRestarts()
     ma_loss=1.8
     stream = torch.cuda.current_stream(rank)
     for epoch in range(max_epoch):
-        if rank==0:
+        if rank==10:
             train_bar=tqdm(loader, ncols=0)
         else:
             train_bar = loader
+        li=40
         for i,(tokens, q_str, a_str, a_tokens) in enumerate(train_bar):
             tokens = tokens.to(rank)
             a_tokens = a_tokens.to(rank)
@@ -121,10 +124,13 @@ def training(rank, world_size, max_epoch, model, loader):
             if not config['train_config']['use_prefix']:
                 a_tokens = None
             
-            LM_output, loss = model.forward(tokens, Doc_tokens = a_tokens)
-            
+            ref_logp,(LM_output, loss) = model.forward(tokens, Doc_tokens = a_tokens)
+            LM_output = LM_output.logits
+            LM_output = torch.log_softmax(LM_output, dim=-1)
+            kl = F.kl_div(LM_output, ref_logp, log_target=True, reduction="batchmean")
+            loss = loss.mean() + kl.mean()
 
-            loss = loss.mean()
+
             if config['train_config']['use_prefix']:
                 optim.zero_grad()
                 loss.backward()
@@ -132,8 +138,9 @@ def training(rank, world_size, max_epoch, model, loader):
             scheduler.step()
 
             ma_loss = ma_loss*0.98 + 0.02*(loss if not torch.isnan(loss) else ma_loss)
-            if rank==0:
-                train_bar.set_postfix_str(f', loss: {ma_loss.item():.3f}/{loss.item():.3f}')
+            if rank==0 and i-li>=50:
+                li=i
+                print(f', loss: {ma_loss.item():.3f}/{loss.item():.3f}, KL: {kl.mean().item():.3f}', flush=True)
         stream.synchronize()
         dist.barrier()
         if rank==0:
