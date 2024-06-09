@@ -43,7 +43,7 @@ if __name__=="__main__":
     if True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        LM.load_state_dict(torch.load("/usr/model/EncLM.pt", map_location='cpu'))
+        LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
     max_epoch = 1
     print('Loading dataset...')
     data_path = "data/cleandata.pt"

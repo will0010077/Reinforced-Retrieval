@@ -13,8 +13,8 @@ train_config:
 Enc_config:
   enc_lr : 3.e-4
   groups : 1
-  num_layers : 8
-  num_prefix : 8
+  num_layers : 2
+  num_prefix : 16
 
 Enc_size_config:
   num_hidden_layers: 6

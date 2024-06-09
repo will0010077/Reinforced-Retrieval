@@ -20,6 +20,7 @@ from tqdm import tqdm
 import yaml
 import peft
 import os
+from socket import socket
 token = "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"
 # model_dir = "MediaTek-Research/Breeze-7B-Instruct-v0_1"
 model_dir = "meta-llama/Llama-2-7b-chat-hf"
@@ -81,9 +82,9 @@ class collate():
         return prompt, answer
 
 
-def setup(rank, world_size):
+def setup(rank, world_size, port):
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '45678'
+    os.environ['MASTER_PORT'] = str(port)
 
     # initialize the process group
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
@@ -91,9 +92,9 @@ def setup(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 
-def training(rank, world_size, max_epoch, model, loader):
+def training(rank, world_size, max_epoch, model, loader, port):
     print(f"Running DDP on rank {rank}.")
-    setup(rank, world_size)
+    setup(rank, world_size, port)
 
     model = model.to(rank)
     model = DDP(model, device_ids=[rank], find_unused_parameters=True)
@@ -113,7 +114,7 @@ def training(rank, world_size, max_epoch, model, loader):
             train_bar=tqdm(loader, ncols=0)
         else:
             train_bar = loader
-        li=40
+        li=-50
         for i,(tokens, q_str, a_str, a_tokens) in enumerate(train_bar):
             tokens = tokens.to(rank)
             a_tokens = a_tokens.to(rank)
@@ -124,9 +125,9 @@ def training(rank, world_size, max_epoch, model, loader):
                 a_tokens = None
             
             ref_logp, (LM_output, loss) = model.forward(tokens, Doc_tokens = a_tokens)
-            kl = F.kl_div(LM_output, ref_logp, log_target=True, reduction="batchmean")
+            # kl = F.kl_div(LM_output, ref_logp, log_target=True, reduction="batchmean")
             loss = loss.mean()
-            loss += kl.mean() * 0.5
+            # loss += kl.mean() * 0.1
 
 
             if config['train_config']['use_prefix']:
@@ -138,7 +139,7 @@ def training(rank, world_size, max_epoch, model, loader):
             ma_loss = ma_loss*0.98 + 0.02*(loss if not torch.isnan(loss) else ma_loss)
             if rank==0 and i-li>=50:
                 li=i
-                print(f'epoch {epoch}, iter {i:3d}[loss: {ma_loss.item():.3f}/{loss.item():.3f}, KL: {kl.mean().item():.3f}', flush=True)
+                print(f'epoch {epoch}, iter {i:3d}, loss: {ma_loss.item():.3f}/{loss.item():.3f}', flush=True)
         stream.synchronize()
         dist.barrier()
         if rank==0:
@@ -175,8 +176,12 @@ def main():
     dataset = NQADataset(data_path=data_path)
     loader = DataLoader(dataset, batch_size=48, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
     
+
+    with socket() as s:
+        s.bind(('', 0))
+        port = s.getsockname()[1]
     mp.spawn(training,
-        args=(world_size, max_epoch, LM, loader),
+        args=(world_size, max_epoch, LM, loader, port),
         nprocs=world_size,
         join=True)
         

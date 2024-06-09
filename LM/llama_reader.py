@@ -129,15 +129,18 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
         self.module_name = prepare_config(peft.AdaptionPromptConfig, self.model).target_modules
 
 
-    def forward(self, *args, Doc_tokens = None, k = 1, **kwargs):
+    def forward(self, *args, Doc_tokens = None, k = 1, use_ref = False, **kwargs):
 
         prefix = self.Enc.forward(Doc_tokens)
         self._set_prefix(prefix)
         output = self.model.forward(*args, **kwargs)
         self._del_prefix(prefix)
-        with torch.no_grad():
-            ref_logp, loss = self.model.forward(*args, **kwargs)
-            ref_logp = ref_logp.to(torch.bfloat16)
+
+        ref_logp=None
+        if use_ref:
+            with torch.no_grad():
+                ref_logp, loss = self.model.forward(*args, **kwargs)
+                ref_logp = ref_logp.to(torch.bfloat16)
 
         return ref_logp, output
     
@@ -219,13 +222,13 @@ class LLaMa_reader(torch.nn.Module):
 
         self.generate_config=config['generate_config']
         if from_pretrained:
-            self.model=AutoModelForCausalLM.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.float16)
+            self.model=AutoModelForCausalLM.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.bfloat16)
         else:
-            LM_config = LlamaConfig.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.float16)
+            LM_config = LlamaConfig.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.bfloat16)
             LM_config.intermediate_size=768
             LM_config.hidden_size = 768
             LM_config.num_hidden_layers=8
-            self.model=LlamaForCausalLM(LM_config).to(torch.float16)
+            self.model=LlamaForCausalLM(LM_config).to(torch.bfloat16)
             self.model.generation_config = GenerationConfig.from_pretrained(model_dir)
         self.dtype = self.model.config.torch_dtype
         # print(self.model)
