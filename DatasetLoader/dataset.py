@@ -10,6 +10,7 @@ from threading import Thread, Event,Lock
 import multiprocessing
 from queue import Queue
 import time,os,gc
+import re
 tokenizer = AutoTokenizer.from_pretrained("facebook/contriever")
 
 def write_segment(f, s2c:Queue, qlock:Lock, flock:Lock, event:Event):
@@ -149,26 +150,66 @@ def flush_buffer_to_file(f, buffer, output_lock):
         output_lock.release()
 
 
-class NQADataset():
-    def __init__(self, data_path='app/data/v1.0-simplified_simplified-nq-train.jsonl', num_samples=None):
+class NQADataset(Dataset):
+    def __init__(self, data_path='data/cleandata.jsonl',num_samples=None, use_long=True, use_doc = False):
+        '''
+        '''
         self.data_path = data_path
         self.num_samples = num_samples
+        self.use_long = use_long
+        self.use_doc = use_doc
 
     def load_data(self):
+        data = []
         with open(self.data_path, 'r', encoding='utf-8') as f:
-            data=f.readlines()
-            res=[]
-            for idx, line in enumerate(data):
+            for idx, line in enumerate(f):
                 if idx == self.num_samples:
-                    break  # Stop reading after reaching the desired number of samples
-                # Assuming each line is a separate JSON object
-                a_line = json.loads(line)
-                out = a_line['document_text'], a_line['document_url']
-                if type(out[0])==str and type(out[1])==str:
-                    res.append((out[0], out[1].strip()))
-                    # yield out[0], out[1].strip()\
-        return res
+                    break
+                line = json.loads(line)
 
+                if self.use_long and line["long_answer"]:
+                    data.append(line)
+                elif not self.use_long and line["short_answer"]
+                    data.append(line)
+        return data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+
+        q=self.data[idx]['question']
+        la=re.sub('<[/a-zA-Z0-9]*>', '',string=self.data[idx]['long_answer'])
+        #dict_keys(['document_text', 'long_answer_candidates', 'question_text', 'annotations', 'document_url', 'example_id'])
+
+        # a=sample['annotations'][0]['long_answer']#sample['long_answer_candidates'][random_number]
+
+        # long_answer=' '.join(sample['document_text'].split()[a['start_token']:a['end_token']])
+
+        return q, la#str(sample['question_text']),long_answer#text_without_tags
+
+def text_normal(text):
+    if isinstance(text, list):
+        return [*map(text_normal, text)]
+    if isinstance(text, tuple):
+        return tuple(map(text_normal, text))
+
+    assert isinstance(text, str)
+    text = text.strip()
+    text=re.sub("(<[^<>]{1,20}>)", '', text)
+    text = re.sub(" +", " ", text)
+    text = (text.replace(" \'s", "\'s")
+        .replace(" :", ":")
+        .replace(" ;", "\;")
+        .replace(" ,", ",")
+        .replace(" .", ".")
+        .replace("( ", "(")
+        .replace(" )", ")")
+    )
+    text = re.sub("\.+", ".", text)
+
+    #<Th_colspan="2">
+    return text.strip()
 def segmentation(shared_dict,file_lock,shared_int,segment, window_size, step, output_file='app/data/segmented_data.h5'):
     '''load data, segmented to 288 token id, save to h5py'''
 
@@ -258,10 +299,9 @@ def segmentation(shared_dict,file_lock,shared_int,segment, window_size, step, ou
     #     return out #,sample['question_text']
 
 class QAPairDataset(Dataset):
-    def __init__(self, data_path='/home/devil/workspace/nlg_progress/backend/app/data/cleandata.pt', num_samples=None):
+    def __init__(self, data_path='data/cleandata.jsonl', num_samples=None):
         self.data_path = data_path
         self.num_samples = num_samples
-        self.data = torch.load(self.data_path)
         if num_samples is not None:
             self.data=self.data[:num_samples]
         # self.load_data()
@@ -327,21 +367,21 @@ class cleanDataset(Dataset):
         #dict_keys(['document_text', 'long_answer_candidates', 'question_text', 'annotations', 'document_url', 'example_id'])
         # print(sample['question_text'])
         a=sample['annotations'][0]['long_answer']#sample['long_answer_candidates'][random_number]
-
-        long_answer=' '.join(sample['document_text'].split()[a['start_token']:a['end_token']])
+        splited_doc=sample['document_text'].split()
+        long_answer=' '.join(splited_doc[a['start_token']:a['end_token']])
         short_annotations=sample['annotations'][0]['short_answers']
         if short_annotations==[]:
-            return None,None,None,None,None
+            return None,None,None,None
         if type(short_annotations)==dict:
             short_annotations=[short_annotations]
 
         answers=[]
         for i in range(len(short_annotations)):
-            answer=' '.join(sample['document_text'].split()[short_annotations[i]['start_token']:short_annotations[i]['end_token']])
+            answer=' '.join(splited_doc[short_annotations[i]['start_token']:short_annotations[i]['end_token']])
             answers.append(answer)
         # print(answers)
         # print(len(sample['question_text']))
-        return answers, long_answer, str(sample['document_text']), sample, sample['question_text']
+        return text_normal([answers, long_answer, str(sample['document_text']), sample['question_text']])
 
 class DocumentDatasets():
     def __init__(self) -> None:
@@ -385,30 +425,29 @@ class DocumentDatasets():
         return sum(self.file_len)
 
 def cleandata():
-    data_path='/home/devil/workspace/nlg_progress/backend/app/data/v1.0-simplified_simplified-nq-train.jsonl'
+    data_path='data/v1.0-simplified_simplified-nq-train.jsonl'
 
     dataset=cleanDataset(data_path=data_path,num_samples=None)
 
     datasample=[]
     total_a_lenth=[]
+    file = open("data/cleandata.jsonl", 'w')
     for i in tqdm(range(len(dataset))):
-        ans,la,d ,s,q=dataset[i]
-        if ans!=None:
+        ans, la, d, q=dataset[i]
+        if ans:
             for a in ans:
                 if len(a.split())>10:
                     ans.remove(a)
                     continue
                 total_a_lenth.append(len(a.split()))
-        if ans==None or la==None or ans ==[]:
-            continue
-        else:
-            datasample.append(dict(short_answers=ans,long_answer=la,document=d,question=q))
+        if ans or la:
+            json.dump(dict(short_answers=ans,long_answer=la,document=d,question=q), file)
+            file.write('\n')
+    file.close()
 
     print(sum(total_a_lenth)/len(total_a_lenth))
     print(max(total_a_lenth))
     print('total:',len(datasample))#98708
-    torch.save(datasample,'/home/devil/workspace/nlg_progress/backend/app/data/cleandata.pt')
-    print('saved')
 
 
 

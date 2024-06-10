@@ -45,7 +45,7 @@ class collate():
         cat_qa = [q+" "+a for q, a in zip(unlabel, label)]
         unlabel = self.LMtokenizer(text=unlabel).input_ids
         # print(max([len(s) for s in unlabel]))
-        tokens = self.LMtokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=256, truncation =True,)
+        tokens = self.LMtokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=512, truncation =True,)
         
         for i in range(len(texts)):
             tokens['labels'][i, :len(unlabel[i])]=-100
@@ -95,12 +95,12 @@ def cleanup():
 def training(rank, world_size, max_epoch, model, loader, port):
     print(f"Running DDP on rank {rank}.")
     setup(rank, world_size, port)
-
+    bs = loader.batch_size
     model = model.to(rank)
     model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
     param_list =[p for p in model.parameters() if p.requires_grad]
-    optim = torch.optim.AdamW(param_list, lr = config['Enc_config']['enc_lr']) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
+    optim = torch.optim.Adam(param_list, lr = config['Enc_config']['enc_lr']) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
 
     iter_step = len(loader)*max_epoch
     warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.02))
@@ -133,7 +133,8 @@ def training(rank, world_size, max_epoch, model, loader, port):
             if config['train_config']['use_prefix']:
                 optim.zero_grad()
                 loss.backward()
-                optim.step()
+                if i%int(world_size*bs/128)==0:
+                    optim.step()
             scheduler.step()
 
             ma_loss = ma_loss*0.98 + 0.02*(loss if not torch.isnan(loss) else ma_loss)
@@ -170,11 +171,11 @@ def main():
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
         LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
-    max_epoch = 10
+    max_epoch = 2
     print('Loading dataset...')
     data_path = "data/cleandata.pt"
     dataset = NQADataset(data_path=data_path)
-    loader = DataLoader(dataset, batch_size=48, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
+    loader = DataLoader(dataset, batch_size=16, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
     
 
     with socket() as s:
