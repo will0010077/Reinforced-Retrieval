@@ -133,7 +133,7 @@ def training(rank, world_size, max_epoch, model, loader, port):
             if config['train_config']['use_prefix']:
                 optim.zero_grad()
                 loss.backward()
-                if i%int(world_size*bs/128)==0:
+                if i%min(int(128/(world_size*bs)),1)==0:
                     optim.step()
             scheduler.step()
 

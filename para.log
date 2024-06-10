@@ -17,3 +17,7 @@ No action taken.
 CondaError: Run 'conda init' before 'conda activate'
 
 srun: error: DGX-CN02: task 0: Exited with exit code 1
+/home/qmao.cs11/.conda/envs/RLR/lib/python3.10/site-packages/huggingface_hub/file_download.py:1132: FutureWarning: `resume_download` is deprecated and will be removed in version 1.0.0. Downloads always resume when possible. If you want to force a new download, use `force_download=True`.
+  warnings.warn(
+Loading LLM
+Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:01<00:02,  1.12s/it]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:02<00:01,  1.09s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:02<00:00,  1.05it/s]Loading checkpoint shards: 100%|██████████| 3/3 [00:02<00:00,  1.01it/s]
