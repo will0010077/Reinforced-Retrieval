@@ -96,39 +96,6 @@ def xt_xent(
     dis = dis.mean()
     return loss, dis
 
-class NQADataset(Dataset):
-    def __init__(self, data_path='/home/contriever/v1.0-simplified_simplified-nq-train.jsonl',num_samples=None):
-        self.data_path = data_path
-
-        self.num_samples = num_samples
-        self.data = torch.load(self.data_path)#self.load_data()
-
-    def load_data(self):
-        data = []
-        with open(self.data_path, 'r', encoding='utf-8') as f:
-            for idx, line in enumerate(f):
-                if idx == self.num_samples:
-                    break
-
-                data.append(json.loads(line))
-        return data
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-
-        q=self.data[idx]['question']
-        la=re.sub('<[/a-zA-Z0-9]*>', '',string=self.data[idx]['long_answer'])
-        #dict_keys(['document_text', 'long_answer_candidates', 'question_text', 'annotations', 'document_url', 'example_id'])
-
-        # a=sample['annotations'][0]['long_answer']#sample['long_answer_candidates'][random_number]
-
-        # long_answer=' '.join(sample['document_text'].split()[a['start_token']:a['end_token']])
-
-        return q, la#str(sample['question_text']),long_answer#text_without_tags
-
-
 tokenizer = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")
 def collect_fn(batch):
     '''

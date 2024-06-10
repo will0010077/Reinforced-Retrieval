@@ -158,7 +158,7 @@ class NQADataset(Dataset):
         self.num_samples = num_samples
         self.use_long = use_long
         self.use_doc = use_doc
-
+        self.data = self.load_data()
     def load_data(self):
         data = []
         with open(self.data_path, 'r', encoding='utf-8') as f:
@@ -166,10 +166,11 @@ class NQADataset(Dataset):
                 if idx == self.num_samples:
                     break
                 line = json.loads(line)
-
+                if not self.use_doc:
+                    del line["document"]
                 if self.use_long and line["long_answer"]:
                     data.append(line)
-                elif not self.use_long and line["short_answer"]
+                elif not self.use_long and line["short_answers"]:
                     data.append(line)
         return data
 

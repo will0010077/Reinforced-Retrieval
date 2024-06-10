@@ -14,7 +14,7 @@ from safetensors.torch import save_file, load_file
 from DocBuilder.utils import tensor_retuen_type
 from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
-from fintune_contriver import NQADataset
+from DatasetLoader.dataset import NQADataset
 
 from tqdm import tqdm
 import yaml
@@ -173,7 +173,7 @@ def main():
         LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
     max_epoch = 2
     print('Loading dataset...')
-    data_path = "data/cleandata.pt"
+    data_path = "data/cleandata.jsonl"
     dataset = NQADataset(data_path=data_path)
     loader = DataLoader(dataset, batch_size=16, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
     
