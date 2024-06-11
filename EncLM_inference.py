@@ -13,7 +13,7 @@ from safetensors.torch import save_file, load_file
 from DocBuilder.utils import tensor_retuen_type
 from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
-from fintune_contriver import NQADataset
+from DatasetLoader.dataset import NQADataset
 
 from tqdm import tqdm
 import yaml
