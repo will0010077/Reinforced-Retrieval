@@ -14,6 +14,7 @@ from DocBuilder.utils import tensor_retuen_type
 from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
 from DatasetLoader.dataset import NQADataset
+from metric.reward import BLEU_score, Bert_score
 
 from tqdm import tqdm
 import yaml
@@ -27,7 +28,7 @@ model_dir = "meta-llama/Llama-2-7b-chat-hf"
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 if __name__=="__main__":
-    device = 1
+    device = 0
     print('Loading LLM')
     LM = LLaMa_reader(model_dir, 'cpu', token = token, from_pretrained=True)
     dtype = LM.dtype
@@ -40,24 +41,31 @@ if __name__=="__main__":
     peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=config['Enc_config']['num_layers'], adapter_len=1)}
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
     LM.to(device)
+    LM.eval()
+
     if True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
         LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
     max_epoch = 1
     print('Loading dataset...')
-    data_path = "data/cleandata.pt"
+    data_path = "data/cleandata.jsonl"
     dataset = NQADataset(data_path=data_path)
-    loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=1, collate_fn=collate().collate_q, persistent_workers=True)
+    loader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=1, collate_fn=collate().collate_q, persistent_workers=True)
 
     for i,(tokens, q_str, a_str, a_tokens) in enumerate(loader):
         
         tokens = tokens.to(device)
         a_tokens = a_tokens.to(device)
         
-        prefix = LM.Enc.forward(a_tokens)
-        LM_output = LM.generate(q_str[0]+" "+" ".join(a_str[0].split()[:5]), prefix=prefix, max_new_tokens=256)
-        for d in zip(LM_output, a_str):
-            print(d, "\n", '='*80)
+        with torch.no_grad():
+            prefix = LM.Enc.forward(a_tokens)
+            message = [q_str[j]+" "+" ".join(a_str[j].split()[:5]) for j in range(len(q_str))]
+            LM_output = LM.generate(message, prefix=prefix, max_new_tokens=256)
+
+        LM_output = [ LM_output[j][len(q_str[j]):] for j in range(len(q_str))]
+        
+        print(LM_output, list(a_str))
+        print("bert:", Bert_score(LM_output, list(a_str)))
         if i==10:
             break
