@@ -163,6 +163,7 @@ def main():
     # print(LM.model.config)
     print(f'Initialize KnowEnc with {dtype}...')
     Encoder=KnowEncoder(dims = num_dims, **config['Enc_config'], dtype=dtype)
+    Encoder.to(torch.bfloat16)
 
     print(f'Initialize EncTunedLM...')
     peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=config['Enc_config']['num_layers'], adapter_len=1)}
@@ -171,7 +172,7 @@ def main():
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
         LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
-    max_epoch = 2
+    max_epoch = 10
     print('Loading dataset...')
     data_path = "data/cleandata.jsonl"
     dataset = NQADataset(data_path=data_path)

@@ -206,6 +206,8 @@ def text_normal(text):
         .replace(" .", ".")
         .replace("( ", "(")
         .replace(" )", ")")
+        .replace(" - ", "-")
+        
     )
     text = re.sub("\.+", ".", text)
 

@@ -3,6 +3,7 @@ __pycache__
 *.pt
 *.pdf
 *.zip
+*.log
 data/
 save/
 huggingface/

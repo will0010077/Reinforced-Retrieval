@@ -15,7 +15,7 @@ bert_dir = "huggingface/bert"
 tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
 # token = tokenizer.convert_ids_to_tokens(torch.arange(1000)) #998-104
 class KnowEncoder(torch.nn.Module):
-    def __init__(self, num_layers, dims, groups, num_prefix, dtype=torch.float16, **kwargs):
+    def __init__(self, num_layers, dims, groups, num_prefix, dtype=torch.bfloat16, **kwargs):
         super().__init__()
         if dims % groups !=0:
             raise ValueError(f'Dims must divided by groups')

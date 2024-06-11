@@ -11,9 +11,9 @@ train_config:
   use_prefix : True
 
 Enc_config:
-  enc_lr : 1.e-4
+  enc_lr : 3.e-4
   groups : 1
-  num_layers : 8
+  num_layers : 16
   num_prefix : 8
 
 Enc_size_config:
