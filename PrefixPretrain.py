@@ -179,7 +179,7 @@ def main():
     print('Loading dataset...')
     data_path = "data/cleandata.jsonl"
     dataset = NQADataset(data_path=data_path)
-    loader = DataLoader(dataset, batch_size=16, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
+    loader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
     
 
     with socket() as s:
