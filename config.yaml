@@ -19,8 +19,8 @@ Enc_config:
 Enc_size_config:
   num_hidden_layers: 6
   num_attention_heads: 8
-  hidden_size: 512
-  intermediate_size: 1024
+  hidden_size: 768
+  intermediate_size: 3072
 
 lex:
   pre_lr : 5.e-5
