@@ -201,7 +201,7 @@ def text_normal(text):
     text = re.sub(" +", " ", text)
     text = (text.replace(" \'s", "\'s")
         .replace(" :", ":")
-        .replace(" ;", "\;")
+        .replace(" ;", ";")
         .replace(" ,", ",")
         .replace(" .", ".")
         .replace("( ", "(")
@@ -444,7 +444,7 @@ def cleandata():
                     continue
                 total_a_lenth.append(len(a.split()))
         if ans or la:
-            json.dump(dict(short_answers=ans,long_answer=la,document=d,question=q), file)
+            json.dump(dict(short_answers=ans,long_answer=la,question=q), file) #document=d,
             file.write('\n')
     file.close()
 
