@@ -36,7 +36,7 @@ class collate():
         
         self.datatokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
         self.LMtokenizer = AutoTokenizer.from_pretrained(
-            model_dir, use_fast=True, lstrip=False, 
+            LM_dir, use_fast=True, lstrip=False, 
             token='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')
         self.LMtokenizer.pad_token = self.LMtokenizer.eos_token
     def prepare_QA_token(self, texts:list[str], targets:list[str]):
@@ -47,6 +47,7 @@ class collate():
         # print(max([len(s) for s in unlabel]))
         tokens = self.LMtokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=512, truncation =True,)
         
+        tokens['attention_mask'] = torch.cat([torch.ones([len(texts), 1]), tokens['attention_mask']], dim=1)[:,:-1]
         for i in range(len(texts)):
             tokens['labels'][i, :len(unlabel[i])]=-100
         tokens['labels'][tokens['attention_mask']==0]=-100
@@ -54,6 +55,7 @@ class collate():
 
     def collate_qa(self, batch:list):
         q_str, a_str = [*zip(*batch)]
+        q_str, a_str = list(q_str), list(a_str)
         tokens = self.prepare_QA_token(q_str, a_str)
         a_tokens = self.datatokenizer(a_str, return_tensors='pt', padding=True, max_length=256, truncation =True,)
         return tensor_retuen_type(**tokens), q_str, a_str, tensor_retuen_type(**a_tokens)
@@ -61,6 +63,7 @@ class collate():
     def collate_q(self, batch:list):
         batch = [self.templete(q, a) for q, a in batch]
         q_str, a_str = [*zip(*batch)]
+        q_str, a_str = list(q_str), list(a_str)
         tokens = self.LMtokenizer(text=q_str, return_tensors='pt', padding=True, max_length=256, truncation =True,)
         a_tokens = self.datatokenizer(a_str, return_tensors='pt', padding=True, max_length=256, truncation =True,)
         return tensor_retuen_type(**tokens), q_str, a_str, tensor_retuen_type(**a_tokens)

@@ -302,7 +302,9 @@ class LLaMa_reader(torch.nn.Module):
                                         **self.generate_config)
         
         [self.model.generation_config.stop_strings.pop(-1) for _ in range(len(stop_strings))]
-        output = self.tokenizer.batch_decode(outputs,skip_special_tokens=True)
+
+        outputs = [outputs[j][len(tokens.input_ids[0]):] for j in range(len(tokens.input_ids))]
+        output = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
         # self.chat_history.append([message, output])[:,tokens.input_ids.shape[1]:]
         return output
     
