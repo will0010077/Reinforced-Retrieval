@@ -1,0 +1,25 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+numpy = "*"
+torch = "*"
+tqdm = "*"
+transformers = "*"
+pipfile = "*"
+numba = "*"
+torch-kmeans = "*"
+stanza = "*"
+spacy = "*"
+nltk = "*"
+html5lib = "*"
+h5py = "*"
+accelerate = "*"
+matplotlib = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.11"
