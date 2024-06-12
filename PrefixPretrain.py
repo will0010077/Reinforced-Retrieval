@@ -175,7 +175,7 @@ def main():
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
         LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
-    max_epoch = 10
+    max_epoch = 40//4
     print('Loading dataset...')
     data_path = "data/cleandata.jsonl"
     dataset = NQADataset(data_path=data_path)
