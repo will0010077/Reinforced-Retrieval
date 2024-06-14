@@ -136,10 +136,10 @@ def training(rank, world_size, max_epoch, model, loader, port):
             if config['train_config']['use_prefix']:
                 optim.zero_grad()
                 loss.backward()
-                if i%min(int(128/(world_size*bs)),1)==0:
+                if i%max(int(128/(world_size*bs)),1)==0:
                     optim.step()
             scheduler.step()
-
+# stop rolling ! 
             ma_loss = ma_loss*0.98 + 0.02*(loss if not torch.isnan(loss) else ma_loss)
             if rank==0 and i-li>=50:
                 li=i
@@ -175,7 +175,7 @@ def main():
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
         LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
-    max_epoch = 40//4
+    max_epoch = 40//world_size
     print('Loading dataset...')
     data_path = "data/cleandata.jsonl"
     dataset = NQADataset(data_path=data_path)
