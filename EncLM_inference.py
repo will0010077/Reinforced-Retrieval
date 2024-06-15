@@ -28,7 +28,7 @@ model_dir = "meta-llama/Llama-2-7b-chat-hf"
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 if __name__=="__main__":
-    device = 1
+    device = 0
     print('Loading LLM')
     LM = LLaMa_reader(model_dir, 'cpu', token = token, from_pretrained=True)
     dtype = LM.dtype

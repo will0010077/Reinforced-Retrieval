@@ -39,15 +39,15 @@ class collate():
             LM_dir, use_fast=True, lstrip=False, 
             token='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')
         self.LMtokenizer.pad_token = self.LMtokenizer.eos_token
+        self.eos_token = self.LMtokenizer.eos_token
     def prepare_QA_token(self, texts:list[str], targets:list[str]):
         
         unlabel, label = zip(*[self.templete(q, a) for q,a in zip(texts, targets)])
-        cat_qa = [q+" "+a for q, a in zip(unlabel, label)]
+        cat_qa = [q+" "+a+self.eos_token for q, a in zip(unlabel, label)]
         unlabel = self.LMtokenizer(text=unlabel).input_ids
         # print(max([len(s) for s in unlabel]))
         tokens = self.LMtokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=512, truncation =True,)
         
-        tokens['attention_mask'] = torch.cat([torch.ones([len(texts), 1]), tokens['attention_mask']], dim=1)[:,:-1]
         for i in range(len(texts)):
             tokens['labels'][i, :len(unlabel[i])]=-100
         tokens['labels'][tokens['attention_mask']==0]=-100
@@ -136,7 +136,7 @@ def training(rank, world_size, max_epoch, model, loader, port):
             if config['train_config']['use_prefix']:
                 optim.zero_grad()
                 loss.backward()
-                if i%max(int(128/(world_size*bs)),1)==0:
+                if i%max(int(192/(world_size*bs)),1)==0:
                     optim.step()
             scheduler.step()
 # stop rolling ! 

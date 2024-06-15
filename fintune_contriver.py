@@ -15,6 +15,7 @@ from transformers import AutoTokenizer, AutoModel, BertTokenizerFast
 import yaml,os
 from DocBuilder.LexMAE import lex_retriever
 from DocBuilder.utils import top_k_sparse, tensor_retuen_type
+from DatasetLoader.dataset import NQADataset
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
