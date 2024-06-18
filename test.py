@@ -1,15 +1,23 @@
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 
+# Load model directly
+from transformers import AutoTokenizer, AutoModelForCausalLM
+# Use a pipeline as a high-level helper
+from transformers import pipeline
 
-tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
-tokenizer.save_pretrained("huggingface/bert/")
-token = "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"
-model_dir = "meta-llama/Llama-2-7b-chat-hf"
-model=AutoModelForCausalLM.from_pretrained(model_dir, token=token, device_map='cpu', use_cache=True, torch_dtype = torch.float16)
-tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, lstrip=False, token=token)
-model.save_pretrained("huggingface/llama2/")
-tokenizer.save_pretrained("huggingface/llama2/")
+pipe = pipeline("text-generation", model="openai-community/gpt2", torch_dtype = torch.bfloat16,device='cuda:1')
+tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
+stop_id = [tokenizer.eos_token_id]
+for k,v in tokenizer.vocab.items():
+    if "\"" in k:
+        stop_id.append(v)
+print(stop_id)
+message = "for the question \"who is the girl locked up in don't breathe\". The answer is: \"Rocky and Alex evade the Blind Man and hurry to the basement. There, they are shocked to find a restrained, gagged woman in a homemade padded cell.\" the answer is correct (True/False): "
+LMout = pipe(message, num_return_sequences=10, top_p = 0.5, max_new_tokens = 8, no_repeat_ngram_size = 4, eos_token_id = stop_id)
+for i in LMout:
+    print(i['generated_text'][len(message)-1:])
+
 exit()
 if __name__=='__main__':
 #     data=torch.load('data/vecs_reduced_5000000.pt') ## shape:(N,d)

@@ -19,7 +19,7 @@ def Bert_score(a: List[str], b: List[str]) -> List[float]:
     :param b: List of reference answers.
     :return: List of BERT scores for each pair of answers.
     """
-    P, R, F1 = score(a, b, lang="en", model_type='bert-base-uncased')
+    P, R, F1 = score(a, b, lang="en", model_type='bert-base-uncased', device = 1)
     return F1.tolist()
 
 def BLEU_score(a: List[str], b: List[str]) -> List[float]:
