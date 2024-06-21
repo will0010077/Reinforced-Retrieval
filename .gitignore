@@ -1,5 +1,6 @@
 __pycache__
 *.json
+*.jsonl
 *.pt
 *.pdf
 *.zip
@@ -7,3 +8,4 @@ __pycache__
 data/
 save/
 huggingface/
+pdf_reader/error_lines.txt

@@ -51,7 +51,7 @@ if __name__=="__main__":
     print('Loading dataset...')
     data_path = "data/cleandata.jsonl"
     dataset = NQADataset(data_path=data_path, num_samples=10000)
-    loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=1, collate_fn=collate().collate_q, persistent_workers=True)
+    loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
 
     ori_bert_list = []
     pre_bert_list = []
@@ -61,9 +61,14 @@ if __name__=="__main__":
     for i,(tokens, q_str, a_str, a_tokens) in enumerate(loader):
         
         tokens = tokens.to(device)
+        del tokens['labels']
         a_tokens = a_tokens.to(device)
         
         with torch.no_grad():
+            ref_logp, (LM_output, loss) = LM.forward(tokens,return_logits = True,  Doc_tokens=a_tokens)
+            print(LM_output.shape)
+            print()
+            exit()
             prefix = LM.Enc.forward(a_tokens)
             message = [q_str[j] for j in range(len(q_str))] #+" "+" ".join(a_str[j].split()[:5])
             output_ori = LM.generate(message, prefix=None, max_new_tokens=256)

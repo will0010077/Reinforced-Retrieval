@@ -247,7 +247,7 @@ class LLaMa_reader(torch.nn.Module):
     @property
     def device(self):
         return self.model.device
-    def forward(self, tokens)->tuple[Tensor, Tensor]:
+    def forward(self, tokens, return_logits = False)->tuple[Tensor, Tensor]:
         '''
         forward function for teacher forcing\\
         the shape of ids, target, masks is (B,n)\\
@@ -260,7 +260,9 @@ class LLaMa_reader(torch.nn.Module):
         lm_logits:Tensor = output.logits
         logp = torch.log_softmax(lm_logits, dim=-1)
         labels:Tensor
-        del output.past_key_values, output.logits
+        if not return_logits:
+            del output.logits
+        del output.past_key_values
         loss=None
 
         labels = tokens.get('labels', None)

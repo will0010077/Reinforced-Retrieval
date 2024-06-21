@@ -1,5 +1,8 @@
-import sys
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] ="1"
+
+
+import sys
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -72,7 +75,6 @@ The generated answer need to be rewritten(True/False):'''
 
     return context
 if __name__=="__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"] ="1"
     print(torch.cuda.device_count())
     device='cuda'
     
@@ -154,7 +156,7 @@ if __name__=="__main__":
     
     
     print('Loading dataset...')
-    data_path='data/cleandata.pt'
+    data_path='data/cleandata.jsonl'
     dataset=NQADataset(data_path=data_path)
     # dataset.data=dataset.data[:5]*10000
     loader = DataLoader(dataset, batch_size = 16, shuffle=True)
@@ -166,26 +168,31 @@ if __name__=="__main__":
     for epoch in range(max_epoch):
         train_bar=tqdm(loader, ncols=0)
         stream = torch.cuda.current_stream()
-        for q, target in train_bar:
-            B = len(q)
+        for query, target in train_bar:
+            B = len(query)
             
             
             # send to gpu to retrieval loop
-            doc_set = []
+            doc_set = ['']*len(query)
             # a = Agent(q, d, y)
+            #target = target.split()
             
-            messages = state_template(q, target, doc_set)
-            query_tensors = gpt2tokenizer(messages, return_tensors="pt", max_length=256, truncation=True)
-            #### Get response from SFTModel
-            response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
-            response = [gpt2tokenizer.decode(r.squeeze()) for r in response_tensors]
-        
-            #### Compute reward score
-            texts = [q + r for q, r in zip(messages, response)]
-            print(texts)
-            pipe_outputs = reward_model(texts)
-            rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
-        
+            for t, y in enumerate(len(target)):
+                messages = state_template(query, target, doc_set)
+                print(messages)
+                query_tensors = gpt2tokenizer(messages, max_length=256, truncation=True).input_ids
+                query_tensors = [torch.tensor(q) for q in query_tensors]
+                #### Get response from SFTModel
+                response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
+                response = [gpt2tokenizer.decode(r[len(q):],skip_special_tokens=True) for q, r in zip(query_tensors, response_tensors)]
+            
+                print(response)
+                #### Compute reward score
+                response
+                rewards = [torch.ones([])]*len(query)
+                
+                #### Compute reward score
+            
             #### Run PPO step
             stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
             ppo_trainer.log_stats(stats, batch, rewards)

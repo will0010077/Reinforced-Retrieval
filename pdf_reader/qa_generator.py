@@ -25,11 +25,11 @@ def llama_parser(file_name,doc,article:list)->list:
     # matches = qa_pattern_1.findall(article)
     qa_confidence_pairs=[]
     Fail_count=0
-    for i in article:
+    for i, a in enumerate(article):
         try:
-            match_result=json.loads(i)
+            match_result=json.loads(a)
         # 将匹配结果转换为所需格式的列表
-            qa_confidence_pairs+=[{"File_name":file_name,"Document":doc,"Question":vv["Question"].strip(), "Answer":vv["Answer"].strip(), "Confidence":float(vv["Confidence"])} for vv in match_result]
+            qa_confidence_pairs+=[{"File_name":file_name,"Document":doc[i],"Question":vv["Question"].strip(), "Answer":vv["Answer"].strip(), "Confidence":float(vv["Confidence"])} for vv in match_result]
         except:
             Fail_count+=1
             print(f"Fail Count {Fail_count}")
@@ -63,7 +63,7 @@ def chunk_document(batch_data):
 
 
 def collet_fn(batch):
-    res=[LLAMA3_message(prompter(i,2)) for i in batch]
+    res=[LLAMA3_message(prompter(i,1)) for i in batch]
 
     return res,batch
 
@@ -92,7 +92,7 @@ def main(file_path):
         for message,document in (q:=tqdm(File_Loader)):
 
             q.set_postfix_str(f"Start to generate")
-            for times in range(5):
+            for times in range(10):
                 qa_pairs_in_text=LLAMA3_response(model,tokenizer,message)
                 qa_pairs=llama_parser(v['File_name'],document,qa_pairs_in_text)
                 q.set_postfix_str(f"QA generator success-> Parser Success {len(qa_pairs)}")
@@ -104,13 +104,14 @@ def main(file_path):
 
         with open(Save_path,'a+',encoding='unicode_escape') as f:
             json.dump(result,f)
+            
 
         p.set_description_str(f"Write Success")
 
 if __name__=="__main__":
-    torch.cuda.empty_cache()
-    main('smart_factory.jsonl')
-    # with open('smart_factory_qapairs.jsonl',encoding='unicode_escape') as f:
-    #         data=json.load(f)
+    # torch.cuda.empty_cache()
+    # main('smart_factory.jsonl')
+    with open('smart_factory_qapairs2.jsonl',encoding='unicode_escape') as f:
+            data=json.load(f)
 
-    # print(len(data))
+    print(len(data))
