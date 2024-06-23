@@ -128,10 +128,12 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
         self._mark_only_adaption_prompts_as_trainable(self.model)
         self.module_name = prepare_config(peft.AdaptionPromptConfig, self.model).target_modules
 
-
     def forward(self, *args, Doc_tokens = None, k = 1, use_ref = False, **kwargs):
 
-        prefix = self.Enc.forward(Doc_tokens)
+        if Doc_tokens is not None:
+            prefix = self.Enc.forward(Doc_tokens)
+        else:
+            prefix = None
         self._set_prefix(prefix)
         output = self.model.forward(*args, **kwargs)
         self._del_prefix(prefix)
@@ -144,11 +146,25 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
 
         return ref_logp, output
     
-    def generate(self, *args, prefix = None, **kwargs):
+    def pseudo_generate(self, tokens, Doc_tokens = None, **kwargs):
         
+        labels = tokens['labels']
+        del tokens['labels']
+        ref_logp, (LM_output, loss) = self.forward(tokens, return_logits = True,  Doc_tokens=Doc_tokens, **kwargs)
+        mask = labels!=-100
+        mask = torch.roll(mask, -1, 1)
 
+        top_token = torch.argmax(LM_output, dim=-1)#(B,n)
+        p_generation = self.model.tokenizer.batch_decode([top_token[i][mask[i]] for i in range(len(mask))], skip_special_tokens=True)
+        return p_generation
+    def generate(self, messages, Doc_tokens = None, **kwargs):
+        
+        if Doc_tokens is not None:
+            prefix = self.Enc.forward(Doc_tokens)
+        else:
+            prefix = None
         self._set_prefix(prefix)
-        output = self.model.generate(*args, **kwargs)
+        output = self.model.generate(messages, **kwargs)
         self._del_prefix(prefix)
         return output
     

@@ -54,7 +54,9 @@ data_config:
 generate_config:
   no_repeat_ngram_size: 6
   do_sample: False
-  top_k: 1
+  temperature: null
+  top_p: null
+  top_k: null
   num_beams: 1
   bad_words_ids: null
 

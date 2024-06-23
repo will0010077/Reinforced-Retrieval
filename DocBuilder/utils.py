@@ -208,7 +208,7 @@ class tensor_retuen_type(dict):
             value = value.to(self.device)
         return super().__setitem__(key, value)
     def __getstate__(self):
-        return self
+        return tensor_retuen_type(self)
 
     def __setstate__(self, state):
         super().__init__(state)

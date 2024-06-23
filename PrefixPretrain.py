@@ -42,23 +42,23 @@ class collate():
         self.eos_token = self.LMtokenizer.eos_token
     def prepare_QA_token(self, texts:list[str], targets:list[str]):
         
-        unlabel, label = zip(*[self.templete(q, a) for q,a in zip(texts, targets)])
-        cat_qa = [q+" "+a+self.eos_token for q, a in zip(unlabel, label)]
-        unlabel = self.LMtokenizer(text=unlabel).input_ids
+        unlabel_str, label = zip(*[self.templete(q, a) for q,a in zip(texts, targets)])
+        cat_qa = [q+" "+a+self.eos_token for q, a in zip(unlabel_str, label)]
+        unlabel = self.LMtokenizer(text=unlabel_str).input_ids
         # print(max([len(s) for s in unlabel]))
         tokens = self.LMtokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=512, truncation =True,)
         
         for i in range(len(texts)):
             tokens['labels'][i, :len(unlabel[i])]=-100
         tokens['labels'][tokens['attention_mask']==0]=-100
-        return tokens
+        return unlabel, unlabel_str, tokens
 
     def collate_qa(self, batch:list):
         q_str, a_str = [*zip(*batch)]
         q_str, a_str = list(q_str), list(a_str)
-        tokens = self.prepare_QA_token(q_str, a_str)
+        unlabel, unlabel_str, qa_tokens = self.prepare_QA_token(q_str, a_str)
         a_tokens = self.datatokenizer(a_str, return_tensors='pt', padding=True, max_length=256, truncation =True,)
-        return tensor_retuen_type(**tokens), q_str, a_str, tensor_retuen_type(**a_tokens)
+        return tensor_retuen_type(**qa_tokens), unlabel, unlabel_str, q_str, a_str, tensor_retuen_type(**a_tokens)
     
     def collate_q(self, batch:list):
         batch = [self.templete(q, a) for q, a in batch]
@@ -118,8 +118,8 @@ def training(rank, world_size, max_epoch, model, loader, port):
         else:
             train_bar = loader
         li=-50
-        for i,(tokens, q_str, a_str, a_tokens) in enumerate(train_bar):
-            tokens = tokens.to(rank)
+        for i,(qa_tokens, q_tokens, q_str, a_str, a_tokens) in enumerate(train_bar):
+            qa_tokens = qa_tokens.to(rank)
             a_tokens = a_tokens.to(rank)
                     
 
@@ -127,7 +127,7 @@ def training(rank, world_size, max_epoch, model, loader, port):
             if not config['train_config']['use_prefix']:
                 a_tokens = None
             
-            ref_logp, (LM_output, loss) = model.forward(tokens, Doc_tokens = a_tokens)
+            ref_logp, (LM_output, loss) = model.forward(qa_tokens, Doc_tokens = a_tokens)
             # kl = F.kl_div(LM_output, ref_logp, log_target=True, reduction="batchmean")
             loss = loss.mean()
             # loss += kl.mean() * 0.1

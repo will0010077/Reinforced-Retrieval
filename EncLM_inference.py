@@ -28,7 +28,7 @@ model_dir = "meta-llama/Llama-2-7b-chat-hf"
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 if __name__=="__main__":
-    device = 0
+    device = 1
     print('Loading LLM')
     LM = LLaMa_reader(model_dir, 'cpu', token = token, from_pretrained=True)
     dtype = LM.dtype
@@ -51,28 +51,26 @@ if __name__=="__main__":
     print('Loading dataset...')
     data_path = "data/cleandata.jsonl"
     dataset = NQADataset(data_path=data_path, num_samples=10000)
-    loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
+    loader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
 
     ori_bert_list = []
     pre_bert_list = []
     ori_bleu_list = []
     pre_bleu_list = []
-    f = open("moniter.txt", "w")
-    for i,(tokens, q_str, a_str, a_tokens) in enumerate(loader):
+    f = open("moniter.txt", "a")
+    for i,(tokens, unlabel, unlabel_str,  q_str, a_str, a_tokens) in enumerate(loader):
         
         tokens = tokens.to(device)
         del tokens['labels']
+        tokens.input_ids = tokens.input_ids[:,:128]
+        tokens.attention_mask = tokens.attention_mask[:,:128]
         a_tokens = a_tokens.to(device)
         
         with torch.no_grad():
-            ref_logp, (LM_output, loss) = LM.forward(tokens,return_logits = True,  Doc_tokens=a_tokens)
-            print(LM_output.shape)
-            print()
-            exit()
             prefix = LM.Enc.forward(a_tokens)
-            message = [q_str[j] for j in range(len(q_str))] #+" "+" ".join(a_str[j].split()[:5])
-            output_ori = LM.generate(message, prefix=None, max_new_tokens=256)
+            message = [unlabel_str[j] for j in range(len(unlabel_str))] #+" "+" ".join(a_str[j].split()[:5])
             output_pre = LM.generate(message, prefix=prefix, max_new_tokens=256)
+            output_ori = LM.generate(message, prefix=None, max_new_tokens=256)
 
         # output_ori = [ output_ori[j][len(q_str[j]):] for j in range(len(q_str))]
         # output_pre = [ output_pre[j][len(q_str[j]):] for j in range(len(q_str))]
