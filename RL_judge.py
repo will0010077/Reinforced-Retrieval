@@ -8,11 +8,13 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from RL.utils import *
 from DocBuilder.Retriever_k_means import cluster_builder, doc_retriever
+from DatasetLoader.collate_func import collate
 from DocBuilder.LexMAE import lex_retriever
-from DocBuilder.utils import restore_batched_list, generate_mask
+from DocBuilder.utils import restore_batched_list, generate_mask, tensor_retuen_type
 from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
 from fintune_contriver import NQADataset
+from metric.reward import BLEU_score, Bert_score
 import yaml
 import peft
 
@@ -24,7 +26,8 @@ with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 
 token = "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"
-model_dir = "meta-llama/Llama-2-7b-chat-hf"
+bert_dir = "huggingface/bert"
+LM_dir = "/usr/model/llama2-7b/"
 def doc_templete(doc:list[str]):
     return  '\n\n'.join(doc)
 def templete(doc_list:list[str], query:str, answer:str)->tuple[str]:
@@ -50,28 +53,7 @@ def prepare_QA_token(tokenizer, doc:list[list[str]], texts:list[str], targets:li
     return tokens, question_str
 
 def state_template(query:list[str], generation:list[str], doc:list[str]):
-    '''
-```
-{doc_templete(doc_list)}
-```
-
-**User Question**:
-```
-{q}
-```
-
-**Generated Answer**:
-```
-{a}
-```
-
-**Instruction**:
-- Carefully read the provided document.
-- Review the generated answer in the context of the document and the user question.
-- Indicate whether the generated answer should be rewritten or not.
-
-The generated answer need to be rewritten(True/False):''' 
-    context = [f'''{doc_templete(doc_list)} in this article the question "{q}". The answer is: "{a}" the query is: \"''' for doc_list, q,a in zip(doc, query, generation)]
+    context = [f'''{doc_templete(doc_list)} in this article. question "{q}". The answer is: "{a}" the query is: \"''' for doc_list, q,a in zip(doc, query, generation)]
 
     return context
 if __name__=="__main__":
@@ -83,7 +65,7 @@ if __name__=="__main__":
     cluster.load('05_29_14_30')
 
     print('Loading LLM')
-    LM = LLaMa_reader(model_dir, 'cpu', token = token, from_pretrained=True)
+    LM = LLaMa_reader(LM_dir, device, token = token, from_pretrained=True)
     dtype = LM.dtype
     num_dims = LM.model.config.hidden_size
     # print(LM.model.config)
@@ -161,6 +143,8 @@ if __name__=="__main__":
     # dataset.data=dataset.data[:5]*10000
     loader = DataLoader(dataset, batch_size = 16, shuffle=True)
     
+    
+    collate_fn = collate(LM_dir, bert_dir)
     ma_loss=10
     ma_reward=-2
     iter=0
@@ -177,75 +161,49 @@ if __name__=="__main__":
             # a = Agent(q, d, y)
             #target = target.split()
             
-            for t, y in enumerate(len(target)):
-                messages = state_template(query, target, doc_set)
+            for i, y in enumerate(target):
+                # Initialize
+                y:list[str] = y.split(' ')
+                chunk_size = 10
+                y = [' '.join(y[i:i+chunk_size]) for i in range(0,len(y), chunk_size)]
+                messages = state_template([query[i]], [target[i]], [''])
                 print(messages)
-                query_tensors = gpt2tokenizer(messages, max_length=256, truncation=True).input_ids
-                query_tensors = [torch.tensor(q) for q in query_tensors]
-                #### Get response from SFTModel
-                response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
-                response = [gpt2tokenizer.decode(r[len(q):],skip_special_tokens=True) for q, r in zip(query_tensors, response_tensors)]
-            
-                print(response)
-                #### Compute reward score
-                response
-                rewards = [torch.ones([])]*len(query)
+                res_cache = ['']
+                rewards=[]
+                n = -1
+                # RL loop
+                T=len(y)
+                for t in range(T):
+                    # select action
+                    query_tensors = gpt2tokenizer(messages, max_length=256, truncation=True).input_ids
+                    query_tensors = [torch.tensor(q) for q in query_tensors]
+                    #### Get response from SFTModel
+                    response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
+                    response = [gpt2tokenizer.decode(r[len(q):],skip_special_tokens=True) for q, r in zip(query_tensors, response_tensors)]
                 
-                #### Compute reward score
+                    print(response)
+                    
+                    #### Retrieve
+                    dt, zt = retriever.retrieve(response, k=1, num_search=4)
+                    dt = dt.squeeze(1)
+                    dt = tensor_retuen_type(input_ids = dt, attention_mask = torch.ones_like(dt)).to(device)
+                    
+                    #### Take the action and Compute reward
+                    n = n+1
+                    qa_tokens, unlabel, unlabel_str, q_str, a_str, a_tokens = collate_fn.collate_qa([(query[i], y[i])])
+                    p_generation = LM.pseudo_generate(unlabel_str[0]+' '.join(res_cache), y[n], Doc_tokens = dt)
+                    res_cache += p_generation
+                    pseudo_bert=Bert_score(p_generation, [y[n]])
+                    rewards.append(pseudo_bert)
+                print(rewards)
+                exit()
+                # update replay buffer
+                
             
             #### Run PPO step
             stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
             ppo_trainer.log_stats(stats, batch, rewards)
-            for t in range(4):
-                st_ = st
-                a=action[t]
-                match a:
-                    case 'retrieve':
-                        with torch.no_grad():
-                            dt, zt = retriever.retrieve(q, k=num_retrieve, num_search=4)# [B, neg, n] [B, neg, 30522]
-                            # pos neg pair reshape
-                            doc_set = dt
-                            doc_set = doc_set.reshape([-1, doc_set.shape[-1]])#(B*k, n)
-                            st_['d'] = doc_set
-
-                    case 'generate':
-                        # feed doc into KnowEnc to get prefix
-                        if config['train_config']['use_prefix']:
-                            mask = generate_mask(st['d'], Encoder.tokenizer.pad_token_id)
-                            tokens = tensor_retuen_type(input_ids = st_['d'], attention_mask = mask).to(device)
-                            prefix = Encoder.forward(tokens, k = num_retrieve, dtype=torch.float16)
-                            del tokens
-                        else:
-                            prefix = None
-                        # QA pre-process
-                        tokens, question_str = prepare_QA_token(LM.tokenizer, [[]]*B, q, target)
-                        tokens = tokens.to(device)
-                        labels = tokens['labels']
-                        
-                        
-                        # !!!LLM prefix tuning forward, loss and reward!!!
-                        # y, loss = LM.forward(**tokens, prefix=prefix)
-                        # del y
-                        LM_output = LM.forward(tokens, prefix=prefix)
-                        loss = LM_output.loss
-                        del LM_output.logits
-                        reward = -loss.detach()# temperaly, (B)
-                        loss = loss.mean()
-                        prefix[0].retain_grad()
-                        if config['train_config']['use_prefix']:
-                            Enc_optim.zero_grad()
-                            loss.backward()
-                            Enc_optim.step()
-
-                        
-                        cat_input = [a+b+' ' for a,b in zip(question_str, st_['y'])]
-                        # print('cat input',cat_input)
-                        yt_ = LM.generate(cat_input, prefix=prefix, stop_strings=['.'])
-                        
-                        st_['y'] = [a+' '+b for a,b in zip(st_['y'], yt_)]
-                    case _:
-                        pass
-                st = st_
+            
             # END of T
                     
 

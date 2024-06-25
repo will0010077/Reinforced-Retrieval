@@ -15,6 +15,7 @@ from DocBuilder.utils import tensor_retuen_type
 from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
 from DatasetLoader.dataset import NQADataset
+from DatasetLoader.collate_func import collate
 
 from tqdm import tqdm
 import yaml
@@ -31,58 +32,6 @@ with open('config.yaml', 'r') as yamlfile:
 # torch.autograd.set_detect_anomaly(True)
 
 
-class collate():
-    def __init__(self,):
-        
-        self.datatokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
-        self.LMtokenizer = AutoTokenizer.from_pretrained(
-            LM_dir, use_fast=True, lstrip=False, 
-            token='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')
-        self.LMtokenizer.pad_token = self.LMtokenizer.eos_token
-        self.eos_token = self.LMtokenizer.eos_token
-    def prepare_QA_token(self, texts:list[str], targets:list[str]):
-        
-        unlabel_str, label = zip(*[self.templete(q, a) for q,a in zip(texts, targets)])
-        cat_qa = [q+" "+a+self.eos_token for q, a in zip(unlabel_str, label)]
-        unlabel = self.LMtokenizer(text=unlabel_str).input_ids
-        # print(max([len(s) for s in unlabel]))
-        tokens = self.LMtokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=512, truncation =True,)
-        
-        for i in range(len(texts)):
-            tokens['labels'][i, :len(unlabel[i])]=-100
-        tokens['labels'][tokens['attention_mask']==0]=-100
-        return unlabel, unlabel_str, tokens
-
-    def collate_qa(self, batch:list):
-        q_str, a_str = [*zip(*batch)]
-        q_str, a_str = list(q_str), list(a_str)
-        unlabel, unlabel_str, qa_tokens = self.prepare_QA_token(q_str, a_str)
-        a_tokens = self.datatokenizer(a_str, return_tensors='pt', padding=True, max_length=256, truncation =True,)
-        return tensor_retuen_type(**qa_tokens), unlabel, unlabel_str, q_str, a_str, tensor_retuen_type(**a_tokens)
-    
-    def collate_q(self, batch:list):
-        batch = [self.templete(q, a) for q, a in batch]
-        q_str, a_str = [*zip(*batch)]
-        q_str, a_str = list(q_str), list(a_str)
-        tokens = self.LMtokenizer(text=q_str, return_tensors='pt', padding=True, max_length=256, truncation =True,)
-        a_tokens = self.datatokenizer(a_str, return_tensors='pt', padding=True, max_length=256, truncation =True,)
-        return tensor_retuen_type(**tokens), q_str, a_str, tensor_retuen_type(**a_tokens)
-    
-    def templete(self, query:str, answer:str ='')->tuple[str]:
-        Role = ["system", "user", "assistant"]
-        query, answer = query.strip(), answer.strip()
-        messages = [
-            {"role": "system", "content": "This is the searched knowledge: [KNOW]  [/KNOW] Please answer user questions based on the above knowledge\n"},
-            {"role": "user", "content": query},
-            {"role": "assistant", "content": answer}
-        ]
-        prompt = self.LMtokenizer.apply_chat_template(
-            messages[:2],
-            tokenize=False, 
-            add_generation_prompt=True,
-            return_tensors="pt"
-        )
-        return prompt, answer
 
 
 def setup(rank, world_size, port):
@@ -179,7 +128,7 @@ def main():
     print('Loading dataset...')
     data_path = "data/cleandata.jsonl"
     dataset = NQADataset(data_path=data_path)
-    loader = DataLoader(dataset, batch_size=24, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
+    loader = DataLoader(dataset, batch_size=24, shuffle=True, num_workers=1, collate_fn=collate(LM_dir, bert_dir).collate_qa, persistent_workers=True)
     
 
     with socket() as s:

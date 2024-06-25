@@ -68,9 +68,10 @@ if __name__=="__main__":
         
         with torch.no_grad():
             prefix = LM.Enc.forward(a_tokens)
-            message = [unlabel_str[j] for j in range(len(unlabel_str))] #+" "+" ".join(a_str[j].split()[:5])
-            output_pre = LM.generate(message, prefix=prefix, max_new_tokens=256)
-            output_ori = LM.generate(message, prefix=None, max_new_tokens=256)
+            message = [unlabel_str[j] for j in range(len(unlabel_str))]
+            output_pre = LM.generate(message, Doc_tokens=a_tokens, max_new_tokens=256)
+            message = [a_str[j]+ unlabel_str[j] for j in range(len(unlabel_str))]
+            output_ori = LM.generate(message, Doc_tokens=a_tokens, max_new_tokens=256)
 
         # output_ori = [ output_ori[j][len(q_str[j]):] for j in range(len(q_str))]
         # output_pre = [ output_pre[j][len(q_str[j]):] for j in range(len(q_str))]

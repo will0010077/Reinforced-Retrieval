@@ -146,17 +146,17 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
 
         return ref_logp, output
     
-    def pseudo_generate(self, tokens, Doc_tokens = None, **kwargs):
+    def pseudo_generate(self, messages:list[str], forcing:list[str], Doc_tokens = None, **kwargs):
         
-        labels = tokens['labels']
-        del tokens['labels']
-        ref_logp, (LM_output, loss) = self.forward(tokens, return_logits = True,  Doc_tokens=Doc_tokens, **kwargs)
-        mask = labels!=-100
-        mask = torch.roll(mask, -1, 1)
-
-        top_token = torch.argmax(LM_output, dim=-1)#(B,n)
-        p_generation = self.model.tokenizer.batch_decode([top_token[i][mask[i]] for i in range(len(mask))], skip_special_tokens=True)
-        return p_generation
+        if Doc_tokens is not None:
+            prefix = self.Enc.forward(Doc_tokens)
+        else:
+            prefix = None
+        self._set_prefix(prefix)
+        output = self.model.pseudo_generate(messages, forcing, **kwargs)
+        self._del_prefix(prefix)
+        return output
+    
     def generate(self, messages, Doc_tokens = None, **kwargs):
         
         if Doc_tokens is not None:
@@ -240,11 +240,8 @@ class LLaMa_reader(torch.nn.Module):
         if from_pretrained:
             self.model=AutoModelForCausalLM.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.bfloat16)
         else:
-            LM_config = LlamaConfig.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.bfloat16)
-            LM_config.intermediate_size=768
-            LM_config.hidden_size = 768
-            LM_config.num_hidden_layers=8
-            self.model=LlamaForCausalLM(LM_config).to(torch.bfloat16)
+            LM_config = LlamaConfig.from_pretrained(model_dir, token=token, device_map=device)
+            self.model=LlamaForCausalLM(LM_config).to(LM_config.torch_dtype)
             self.model.generation_config = GenerationConfig.from_pretrained(model_dir)
         self.dtype = self.model.config.torch_dtype
         # print(self.model)
@@ -326,8 +323,60 @@ class LLaMa_reader(torch.nn.Module):
         # self.chat_history.append([message, output])[:,tokens.input_ids.shape[1]:]
         return output
     
+    def pseudo_generate(self, messages:list[str], forcing:list[str], **kwargs):
+        if isinstance(messages, str):
+            messages = [messages]
+        if isinstance(forcing, str):
+            forcing = [forcing]
+        cat = [m+" "+f+self.eos for m, f in zip(messages, forcing)]
+        unlabel = self.tokenizer(text=messages).input_ids
+        unlabel_len = [len(m) for m in unlabel]
+        # print(max([len(s) for s in unlabel]))
+        tokens = self.tokenizer(text=cat, return_tensors='pt', padding=True, max_length=512, truncation =True,)
+        tokens = tokens.to(self.model.device)
+        
+        LM_output, loss = self.forward(tokens, return_logits = True, **kwargs)
 
+        top_token = torch.argmax(LM_output, dim=-1)#(B,n)
+        p_generation = self.tokenizer.batch_decode([top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-2] for i in range(len(messages))], skip_special_tokens=True)
+        return p_generation
+        
 
+'''We have 40 pounds of product ready to ship, ready to go.
+
+Are you ready?
+
+Who the hell are you?
+
+You know.
+
+You all know exactly who I am.
+
+Say my name.
+
+You what?
+
+I don't have a damn clue who the hell you are.
+
+Yeah, you do.
+
+I'm the cook.
+
+I'm the man who killed Gus Fring.
+
+Bullshit.
+
+Cartel got Fring.
+
+You sure?
+
+That's right.
+
+Now, say my name.
+
+Heisenberg.
+
+You're goddamn right.'''
 
 if __name__=="__main__":
     inferencer = LLaMa_reader("TheBloke/Llama-2-13B-chat-GPTQ")#TaiwanLLaMaGPTQ("weiren119/Taiwan-LLaMa-v1.0-4bits-GPTQ")

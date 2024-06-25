@@ -161,6 +161,7 @@ class NQADataset(Dataset):
         self.data = self.load_data()
     def load_data(self):
         data = []
+        skip = 0
         with open(self.data_path, 'r', encoding='utf-8') as f:
             for idx, line in enumerate(f):
                 if idx == self.num_samples:
@@ -169,9 +170,13 @@ class NQADataset(Dataset):
                 # if not self.use_doc:
                 #     del line["document"]
                 if self.use_long and line["long_answer"]:
+                    if len(line["long_answer"])>2000:
+                        skip+=1
+                        continue
                     data.append(line)
                 elif not self.use_long and line["short_answers"]:
                     data.append(line)
+        print("skip:",skip)
         return data
 
     def __len__(self):
@@ -456,6 +461,8 @@ def cleandata():
                     continue
                 total_a_lenth.append(len(a.split()))
         if ans or la:
+            if len(la)>2000:
+                continue
             json.dump(dict(short_answers=ans,long_answer=la,question=q), file) #document=d,
             file.write('\n')
     file.close()

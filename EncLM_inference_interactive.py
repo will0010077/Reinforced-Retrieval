@@ -59,7 +59,7 @@ if __name__=="__main__":
         a_tokens = a_tokens.to(device)
         
         with torch.no_grad():
-            p_generation = LM.pseudo_generate(tokens, a_tokens)
+            p_generation = LM.pseudo_generate(unlabel_str, a_str, a_tokens)
             print("Pseudo generation: ", p_generation)
                 
 
