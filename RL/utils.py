@@ -8,6 +8,12 @@ import math
 from DocBuilder.Retriever_k_means import inner
 from DocBuilder.utils import sparse_retrieve_rep, tensor_retuen_type
 import random
+
+import torch.optim as optim
+from transformers import BertModel, BertConfig, BertTokenizer
+from torch.distributions import Categorical
+import config
+
 class transition(tensor_retuen_type):
     def __init__(self, *args, **kwargs):
         '''
@@ -169,15 +175,182 @@ class Transformer_Agent(nn.Module):
         flops_loss = torch.abs(outputs).sum(-1)**2
         return pi_loss, v_loss, reg_loss, flops_loss   
 
+class CustomEnv:
+    def __init__(self, dataset, pretrained_model_name, action_space_size):
+        self.dataset = dataset  # List of tuples (x, y)
+        self.tokenizer = BertTokenizer.from_pretrained(pretrained_model_name)
+        self.action_space_size = action_space_size
+        self.reset()
+
+    def reset(self):
+        self.current_index = 0
+        self.current_data = self.dataset[self.current_index]
+        self.x, self.y = self.current_data
+        self.d_t = ""
+        self.response_buffer = set([""])
+        self.n = 0
+        self.done = False
+        self.steps = 0
+        return self.get_state()
+
+    def get_state(self):
+        state = (self.x, self.d_t, list(self.response_buffer))
+        return state
+
+    def step(self, action):
+        if action == 0:  # Retrieve Document
+            q_t = self.construct_query()
+            self.d_t = self.retrieve_document(q_t)
+            self.response_buffer.add(self.d_t)
+        elif action == 1:  # Get Next Response
+            if self.n < len(self.y):
+                self.n += 1
+                self.d_t = self.get_next_response(self.y[self.n - 1])
+                self.response_buffer.add(self.d_t)
+        elif action == 2:  # Rewrite Current Response
+            self.response_buffer.discard(self.d_t)
+            self.d_t = self.get_next_response(self.y[self.n - 1])
+            self.response_buffer.add(self.d_t)
+        elif action == 3:  # Output Answer
+            self.done = True
+
+        self.steps += 1
+        reward = self.compute_reward()
+        next_state = self.get_state()
+        return next_state, reward, self.done, {}
+
+    def construct_query(self):
+        # Implement query construction logic
+        return f"Query for {self.x}"
+
+    def retrieve_document(self, query):
+        # Implement document retrieval logic
+        return f"Document for {query}"
+
+    def get_next_response(self, ground_truth):
+        # Implement response generation logic
+        return f"Response for {ground_truth} with document {self.d_t}"
+
+    def compute_reward(self):
+        # Implement reward calculation logic
+        return 1.0 if self.done else 0.0
+
+
+class BertAgentCritic(nn.Module):
+    def __init__(self, model_config, action_space_size):
+        super(BertAgentCritic, self).__init__()
+        self.bert = BertModel(BertConfig(**model_config))
+        self.tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+        self.action_head = nn.Linear(self.bert.config.hidden_size, action_space_size)
+        self.value_head = nn.Linear(self.bert.config.hidden_size, 1)
+        self.action_space_size = action_space_size
+    
+    def forward(self, inputs):
+        inputs = self.tokenizer(inputs, return_tensors="pt", padding=True, truncation=True)
+        # inputs['input_ids'] shape: (batch_size, sequence_length)
+        # inputs['attention_mask'] shape: (batch_size, sequence_length)
+        outputs = self.bert(**inputs)
+        # outputs.last_hidden_state shape: (batch_size, sequence_length, hidden_size)
+        cls_output = outputs.last_hidden_state[:, 0, :]  # Shape: (batch_size, hidden_size)
+        action_logits = self.action_head(cls_output)  # Shape: (batch_size, action_space_size)
+        state_value = self.value_head(cls_output)  # Shape: (batch_size, 1)
+        return action_logits, state_value  # Shapes: (batch_size, action_space_size), (batch_size, 1)
+
+class PPOTrainer:
+    def __init__(self, model, optimizer, gamma=0.99, clip_epsilon=0.2, lambd=0.95, update_epochs=4, batch_size=32):
+        self.model = model
+        self.optimizer = optimizer
+        self.gamma = gamma
+        self.clip_epsilon = clip_epsilon
+        self.lambd = lambd
+        self.update_epochs = update_epochs
+        self.batch_size = batch_size
+
+    def ppo_loss(self, old_log_probs, log_probs, advantages, returns, values):
+        # old_log_probs shape: (batch_size,)
+        # log_probs shape: (batch_size,)
+        # advantages shape: (batch_size,)
+        # returns shape: (batch_size,)
+        # values shape: (batch_size,)
+
+        ratios = torch.exp(log_probs - old_log_probs)  # Shape: (batch_size,)
+        surr1 = ratios * advantages  # Shape: (batch_size,)
+        surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size,)
+        actor_loss = -torch.min(surr1, surr2).mean()  # Shape: scalar
+
+        critic_loss = (returns - values).pow(2).mean()  # Shape: scalar
+
+        entropy_loss = -log_probs.mean()  # Shape: scalar
+        return actor_loss + 0.5 * critic_loss - 0.01 * entropy_loss  # Shape: scalar
+
+    def compute_gae(self, rewards, values, dones, next_value):
+        # rewards shape: (sequence_length,)
+        # values shape: (sequence_length,)
+        # dones shape: (sequence_length,)
+        # next_value shape: scalar
+
+        values = values + (next_value,)  # Shape: (sequence_length + 1,)
+        gae = 0
+        returns = []
+        for step in reversed(range(len(rewards))):
+            delta = rewards[step] + self.gamma * values[step + 1] * (1 - dones[step]) - values[step]  # Shape: scalar
+            gae = delta + self.gamma * self.lambd * (1 - dones[step]) * gae  # Shape: scalar
+            returns.insert(0, gae + values[step])  # Shape: scalar
+        return returns  # Shape: (sequence_length,)
+
+    def update(self, memory):
+        old_states, old_actions, old_log_probs, rewards, dones, values = zip(*memory)
+        returns = self.compute_gae(rewards, values, dones, next_value=0)
+
+        old_states = old_states # Shape: (memory_size, state_size)
+        old_actions = torch.tensor(old_actions, dtype=torch.float32)  # Shape: (memory_size,)
+        old_log_probs = torch.tensor(old_log_probs, dtype=torch.float32)  # Shape: (memory_size,)
+        returns = torch.tensor(returns, dtype=torch.float32)  # Shape: (memory_size,)
+        values = torch.tensor(values, dtype=torch.float32)  # Shape: (memory_size,)
+
+        advantages = returns - values  # Shape: (memory_size - 1,)
+
+        for _ in range(self.update_epochs):
+            for idx in range(0, len(old_states), self.batch_size):
+                batch_states = old_states[idx:idx+self.batch_size]  # Shape: (batch_size, state_size)
+                batch_actions = old_actions[idx:idx+self.batch_size]  # Shape: (batch_size,)
+                batch_old_log_probs = old_log_probs[idx:idx+self.batch_size]  # Shape: (batch_size,)
+                batch_returns = returns[idx:idx+self.batch_size]  # Shape: (batch_size,)
+                batch_advantages = advantages[idx:idx+self.batch_size]  # Shape: (batch_size,)
+
+                logits, state_values = self.model(batch_states)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
+                log_probs = Categorical(logits=logits).log_prob(batch_actions)  # Shape: (batch_size,)
+
+                loss = self.ppo_loss(batch_old_log_probs, log_probs, batch_advantages, batch_returns, state_values)  # Shape: scalar
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+
+
 if __name__=='__main__':
     
-    B = doc_buffer()
     
-    for i in range(10000):
-        B.append(transition(torch.rand([5,64]), torch.rand([5,64]), torch.rand([5,64]),torch.rand([5,64]), torch.ones(1)))
-    B.clear()
-    for i in range(10000):
-        B.append(transition(torch.rand([5,64]), torch.rand([5,64]), torch.rand([5,64]),torch.rand([5,64]), torch.ones(1)))
-    
-    print(B.sample())
-    
+    # Example usage
+    env = CustomEnv()
+    model = BertAgentCritic(config.agent_size_config, env.action_space_size)
+    trainer = PPOTrainer(model)
+
+    # Training loop
+    for episode in range(1000):
+        state = env.reset()  # Shape: string
+        done = False
+        memory = []
+
+        while not done:
+            action_logits, state_value = model([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
+            action_prob = torch.softmax(action_logits, dim=-1)  # Shape: (1, action_space_size)
+            dist = Categorical(action_prob)
+            action = dist.sample()  # Shape: (1,)
+
+            next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+            memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
+
+            state = next_state
+
+        trainer.update(memory)

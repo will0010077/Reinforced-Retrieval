@@ -6,11 +6,9 @@ import torch
 
 from torch import nn, Tensor
 from transformers import AutoTokenizer, AutoModel, BertConfig, BertModel
-import yaml
+from config import enc_size_config
 
-with open('config.yaml', 'r') as yamlfile:
-    config = yaml.safe_load(yamlfile)
-config = config['Enc_size_config']
+config = enc_size_config
 bert_dir = "huggingface/bert"
 tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
 # token = tokenizer.convert_ids_to_tokens(torch.arange(1000)) #998-104

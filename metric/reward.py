@@ -11,7 +11,7 @@ import numpy as np
 nltk.download('punkt')
 
 
-def Bert_score(a: List[str], b: List[str]) -> List[float]:
+def Bert_score(a: List[str], b: List[str]) -> tuple[torch.Tensor]:
     """
     Calculate the BERT score for each pair of sentences in a and b.
     
@@ -20,7 +20,7 @@ def Bert_score(a: List[str], b: List[str]) -> List[float]:
     :return: List of BERT scores for each pair of answers.
     """
     P, R, F1 = score(a, b, lang="en", model_type='bert-base-uncased', device = None)
-    return F1.tolist()
+    return F1.unbind()
 
 def BLEU_score(a: List[str], b: List[str]) -> List[float]:
     """

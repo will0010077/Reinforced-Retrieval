@@ -24,7 +24,7 @@ import os
 from socket import socket
 token = "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"
 # model_dir = "MediaTek-Research/Breeze-7B-Instruct-v0_1"
-model_dir = "meta-llama/Llama-2-7b-chat-hf"
+# model_dir = "meta-llama/Llama-2-7b-chat-hf"
 bert_dir = "huggingface/bert"
 LM_dir = "huggingface/llama2"
 with open('config.yaml', 'r') as yamlfile:

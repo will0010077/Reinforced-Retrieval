@@ -19,11 +19,8 @@ import yaml
 import peft
 
 from transformers import AutoTokenizer
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
+import config
 
-
-with open('config.yaml', 'r') as yamlfile:
-    config = yaml.safe_load(yamlfile)
 
 token = "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"
 bert_dir = "huggingface/bert"
@@ -60,8 +57,8 @@ if __name__=="__main__":
     print(torch.cuda.device_count())
     device='cuda'
     
-    cluster_config=config["cluster_config"]
-    cluster = cluster_builder(k=cluster_config["k"])
+    cluster_config=config.cluster_config
+    cluster = cluster_builder(k=cluster_config.k)
     cluster.load('05_29_14_30')
 
     print('Loading LLM')
@@ -70,10 +67,10 @@ if __name__=="__main__":
     num_dims = LM.model.config.hidden_size
     # print(LM.model.config)
     print(f'Initialize KnowEnc with {dtype}...')
-    Encoder=KnowEncoder(dims = num_dims, **config['Enc_config'], dtype=dtype)
+    Encoder=KnowEncoder(dims = num_dims, **config.enc_config, dtype=dtype)
 
     print(f'Initialize EncTunedLM...')
-    peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=config['Enc_config']['num_layers'], adapter_len=1)}
+    peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=config.enc_config.num_layers, adapter_len=1)}
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
     LM.to(device)
     LM.eval()
@@ -97,39 +94,66 @@ if __name__=="__main__":
     
     print("Initialize Agent...")
     
-    config = PPOConfig(
-        model_name="gpt2",
-        learning_rate=1.41e-5,
-        mini_batch_size = 32,
-        batch_size = 128
-    )
-    model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, device_map=device)
-    model.to(device)
-    gpt2tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+    # RL_bs = 64
+    # config = PPOConfig(
+    #     model_name="gpt2",
+    #     learning_rate=1.e-5,
+    #     mini_batch_size = 16,
+    #     batch_size = RL_bs,
+    #     gradient_accumulation_steps = 4,
+    # )
+    # model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, device_map=device)
+    # model.to(device)
+    # gpt2tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
-    gpt2tokenizer.pad_token = gpt2tokenizer.eos_token
-    gpt2tokenizer.padding_side = "left"
+    # gpt2tokenizer.pad_token = gpt2tokenizer.eos_token
+    # gpt2tokenizer.padding_side = "left"
     
-    ppo_trainer = PPOTrainer(
-        model=model,
-        config=config,
-        tokenizer=gpt2tokenizer,
-    )
-    stop_id = [gpt2tokenizer.eos_token_id]
-    for k,v in gpt2tokenizer.vocab.items():
-        if "\"" in k:
-            stop_id.append(v)
-    generation_kwargs = {
-        "min_length": -1,
-        "top_k": 0.0,
-        "top_p": 1.0,
-        "do_sample": True,
-        "pad_token_id": gpt2tokenizer.eos_token_id,
-        "no_repeat_ngram_size" : 4, 
-        "eos_token_id" : stop_id,
-        "max_new_tokens" : 16,
-    }
+    # ppo_trainer = PPOTrainer(
+    #     model=model,
+    #     config=config,
+    #     tokenizer=gpt2tokenizer,
+    # )
+    # stop_id = [gpt2tokenizer.eos_token_id]
+    # for k,v in gpt2tokenizer.vocab.items():
+    #     if "\"" in k:
+    #         stop_id.append(v)
+    # generation_kwargs = {
+    #     "min_length": -1,
+    #     "top_k": 30,
+    #     "top_p": 0.7,
+    #     "do_sample": True,
+    #     "pad_token_id": gpt2tokenizer.eos_token_id,
+    #     "no_repeat_ngram_size" : 4, 
+    #     "eos_token_id" : stop_id,
+    #     "max_new_tokens" : 16,
+    # }
     
+    # Example usage
+    env = CustomEnv()
+    model = BertAgentCritic(config.agent_size_config, env.action_space_size)
+    Agent_optim = optim.AdamW(model.parameters(), lr = 1e-5)
+    trainer = PPOTrainer(model, Agent_optim)
+    # Training loop
+    for episode in range(1000):
+        state = env.reset()  # Shape: string
+        done = False
+        memory = []
+
+        while not done:
+            with torch.no_grad():
+                action_logits, state_value = model([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
+            action_prob = torch.softmax(action_logits, dim=-1)  # Shape: (1, action_space_size)
+            dist = Categorical(action_prob)
+            action = dist.sample()  # Shape: (1,)
+
+            next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+            memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
+
+            state = next_state
+        print(memory[-1])
+        trainer.update(memory)
+    exit()
     max_epoch = 10
     num_retrieve=1
     num_neg=16
@@ -141,7 +165,7 @@ if __name__=="__main__":
     data_path='data/cleandata.jsonl'
     dataset=NQADataset(data_path=data_path)
     # dataset.data=dataset.data[:5]*10000
-    loader = DataLoader(dataset, batch_size = 16, shuffle=True)
+    loader = DataLoader(dataset, batch_size = 1, shuffle=True)
     
     
     collate_fn = collate(LM_dir, bert_dir)
@@ -152,6 +176,8 @@ if __name__=="__main__":
     for epoch in range(max_epoch):
         train_bar=tqdm(loader, ncols=0)
         stream = torch.cuda.current_stream()
+        qry_buffer, res_buffer, re_buffer = [],[],[]
+        
         for query, target in train_bar:
             B = len(query)
             
@@ -167,7 +193,6 @@ if __name__=="__main__":
                 chunk_size = 10
                 y = [' '.join(y[i:i+chunk_size]) for i in range(0,len(y), chunk_size)]
                 messages = state_template([query[i]], [target[i]], [''])
-                print(messages)
                 res_cache = ['']
                 rewards=[]
                 n = -1
@@ -180,11 +205,9 @@ if __name__=="__main__":
                     #### Get response from SFTModel
                     response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
                     response = [gpt2tokenizer.decode(r[len(q):],skip_special_tokens=True) for q, r in zip(query_tensors, response_tensors)]
-                
                     print(response)
-                    
                     #### Retrieve
-                    dt, zt = retriever.retrieve(response, k=1, num_search=4)
+                    dt, zt = retriever.retrieve(query[i]+' '.join(res_cache), k=1, num_search=4)
                     dt = dt.squeeze(1)
                     dt = tensor_retuen_type(input_ids = dt, attention_mask = torch.ones_like(dt)).to(device)
                     
@@ -194,15 +217,18 @@ if __name__=="__main__":
                     p_generation = LM.pseudo_generate(unlabel_str[0]+' '.join(res_cache), y[n], Doc_tokens = dt)
                     res_cache += p_generation
                     pseudo_bert=Bert_score(p_generation, [y[n]])
-                    rewards.append(pseudo_bert)
-                print(rewards)
-                exit()
+                    qry_buffer.extend(query_tensors)
+                    res_buffer.extend(response_tensors)
+                    re_buffer.extend(pseudo_bert)
+                
                 # update replay buffer
                 
             
             #### Run PPO step
-            stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-            ppo_trainer.log_stats(stats, batch, rewards)
+            train_bar.set_postfix_str(f'len: {len(re_buffer)}, reward: {sum(re_buffer)/len(re_buffer):.3f}')
+            if len(re_buffer)>=RL_bs:
+                stats = ppo_trainer.step(qry_buffer[:RL_bs], res_buffer[:RL_bs], re_buffer[:RL_bs])
+                qry_buffer, res_buffer, re_buffer = qry_buffer[RL_bs:], res_buffer[RL_bs:], re_buffer[RL_bs:]
             
             # END of T
                     
@@ -219,12 +245,10 @@ if __name__=="__main__":
             
             # doc = [retriever.tokenizer.batch_decode(doc_set[i]) for i in range(len(doc_set))]
 
-            if iter%10==0:
-                train_bar.set_postfix_str(f'len: {tokens.input_ids.shape[-1]}, loss: {loss.item():.3f}, reward: {ma_reward:.2f}')
-            if iter%100==0:
-                with open("moniter.txt", 'a') as f:
-                    f.write(question_str[0] + LM.generate(question_str[0], prefix = [p[0:1] for p in prefix])[0] + '\n')
-                    f.write('Ground Truth: '+ target[0])
+            # if iter%100==0:
+            #     with open("moniter.txt", 'a') as f:
+            #         f.write(question_str[0] + LM.generate(question_str[0], prefix = [p[0:1] for p in prefix])[0] + '\n')
+            #         f.write('Ground Truth: '+ target[0])
                     
                 
             iter+=1
