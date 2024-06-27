@@ -5,7 +5,11 @@ os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 import sys
 import torch
 from torch.utils.data import DataLoader
+from torch.distributions import Categorical
+
 from tqdm import tqdm
+
+
 from RL.utils import *
 from DocBuilder.Retriever_k_means import cluster_builder, doc_retriever
 from DatasetLoader.collate_func import collate
@@ -130,35 +134,50 @@ if __name__=="__main__":
     # }
     
     # Example usage
-    env = CustomEnv()
-    model = BertAgentCritic(config.agent_size_config, env.action_space_size)
-    Agent_optim = optim.AdamW(model.parameters(), lr = 1e-5)
-    trainer = PPOTrainer(model, Agent_optim)
-    # Training loop
-    for episode in range(1000):
-        state = env.reset()  # Shape: string
-        done = False
-        memory = []
-
-        while not done:
-            with torch.no_grad():
-                action_logits, state_value = model([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
-            action_prob = torch.softmax(action_logits, dim=-1)  # Shape: (1, action_space_size)
-            dist = Categorical(action_prob)
-            action = dist.sample()  # Shape: (1,)
-
-            next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
-            memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
-
-            state = next_state
-        print(memory[-1])
-        trainer.update(memory)
-    exit()
     max_epoch = 10
     num_retrieve=1
     num_neg=16
     num_RL_update = 8
 
+    print('Loading dataset...')
+    data_path='data/cleandata.jsonl'
+    dataset=NQADataset(data_path=data_path)
+    
+    env = CustomEnv(dataset, LM, retriever, 4)
+    agent = BertAgentCritic(config.agent_size_config, env.action_space_size)
+    agent.to(device)
+    
+    Agent_optim = optim.AdamW(agent.parameters(), lr = 1e-5)
+    trainer = PPOTrainer(agent, Agent_optim, update_epochs=4)
+    # Training loop
+    memory = []
+    ma_reward=0.5
+    for episode in range(100000):
+        state = env.reset()  # Shape: string
+        done = False
+        reward_list = []
+        while not done:
+            with torch.no_grad():
+                action_logits, state_value = agent([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
+            action_logits, state_value = action_logits.cpu(), state_value.cpu()
+            action_prob = torch.softmax(action_logits, dim=-1)  # Shape: (1, action_space_size)
+            dist = Categorical(action_prob)
+            if torch.rand([1])<0.05:
+                action = torch.randint(env.action_space_size, [1])
+            else:
+                action = dist.sample()  # Shape: (1,)
+            print(action.item(), end='', flush=True)
+            next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+            memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
+            reward_list.append(reward)
+            state = next_state
+        print("\r"," "*40,"\r", end='')
+        ma_reward = 0.95*ma_reward + 0.05*sum(reward_list)
+        print("reward: ",ma_reward, end="\r")
+        if episode%16==0:
+            trainer.update(memory)
+            memory=[]
+    exit()
     
     
     print('Loading dataset...')

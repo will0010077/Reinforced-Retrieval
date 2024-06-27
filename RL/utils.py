@@ -7,12 +7,16 @@ import torch.nn.functional as F
 import math
 from DocBuilder.Retriever_k_means import inner
 from DocBuilder.utils import sparse_retrieve_rep, tensor_retuen_type
+from DatasetLoader.collate_func import collate
+from LM.llama_reader import EncTunedLM
+from DocBuilder.Retriever_k_means import doc_retriever
+from metric.reward import BLEU_score, Bert_score
 import random
 
 import torch.optim as optim
 from transformers import BertModel, BertConfig, BertTokenizer
 from torch.distributions import Categorical
-import config
+from config import agent_size_config
 
 class transition(tensor_retuen_type):
     def __init__(self, *args, **kwargs):
@@ -176,65 +180,109 @@ class Transformer_Agent(nn.Module):
         return pi_loss, v_loss, reg_loss, flops_loss   
 
 class CustomEnv:
-    def __init__(self, dataset, pretrained_model_name, action_space_size):
+    def __init__(self, dataset, LM:EncTunedLM, ret:doc_retriever, action_space_size):
         self.dataset = dataset  # List of tuples (x, y)
-        self.tokenizer = BertTokenizer.from_pretrained(pretrained_model_name)
         self.action_space_size = action_space_size
+        self.LM = LM
+        self.ret = ret
+        self.current_index = 0
+        self.collate = collate()
         self.reset()
 
     def reset(self):
-        self.current_index = 0
-        self.current_data = self.dataset[self.current_index]
+        self.current_data = self.dataset[self.current_index % len(self.dataset)]
+        self.current_index+=1
         self.x, self.y = self.current_data
-        self.d_t = ""
-        self.response_buffer = set([""])
-        self.n = 0
+        self.y:list[str] = self.y.split(' ')
+        chunk_size = 10
+        self.y = [' '.join(self.y[i:i+chunk_size]) for i in range(0,len(self.y), chunk_size)]
+        
+        self.d_t, zt = self.ret.retrieve(self.x, k=1, num_search=4)
+        self.d_t = self.d_t.squeeze(1)
+        self.hat_y_t = ""
+        self.response_cache = [self.hat_y_t]
+        self.n = -1  # Initialize n to -1
         self.done = False
         self.steps = 0
+        self.last_action=-1
         return self.get_state()
 
-    def get_state(self):
-        state = (self.x, self.d_t, list(self.response_buffer))
+    def get_state(self)->str:
+        state = self.collate.state_templete(self.x, " ".join(self.response_cache), self.d_t)
         return state
 
     def step(self, action):
+        reward = 0
+        self.action = action
         if action == 0:  # Retrieve Document
             q_t = self.construct_query()
-            self.d_t = self.retrieve_document(q_t)
-            self.response_buffer.add(self.d_t)
+            self.d_t, zt = self.ret.retrieve(q_t, k=1, num_search=4)
+            self.d_t = self.d_t.squeeze(1)
+            self.hat_y_t = self.hat_y_t  # Keep current response
         elif action == 1:  # Get Next Response
-            if self.n < len(self.y):
+            if self.n+1 < len(self.y):
                 self.n += 1
-                self.d_t = self.get_next_response(self.y[self.n - 1])
-                self.response_buffer.add(self.d_t)
+                self.hat_y_t = self.get_next_response()
+                self.response_cache.append(self.hat_y_t[0])
+                if self.n+1==len(self.y):
+                    self.done = True
+            elif self.n+1 == len(self.y):
+                reward += -1 # Panalty to too long response
+                self.done=True
         elif action == 2:  # Rewrite Current Response
-            self.response_buffer.discard(self.d_t)
-            self.d_t = self.get_next_response(self.y[self.n - 1])
-            self.response_buffer.add(self.d_t)
+            if self.n>-1:
+                self.response_cache.pop()
+                self.hat_y_t = self.get_next_response()
+                self.response_cache.append(self.hat_y_t[0])
+            else:
+                reward+=-1
         elif action == 3:  # Output Answer
             self.done = True
 
         self.steps += 1
-        reward = self.compute_reward()
+        if self.steps>2*len(self.y):
+            self.done=True
+        reward = reward + self.compute_reward()
         next_state = self.get_state()
+        
+        self.last_action=self.action
         return next_state, reward, self.done, {}
 
     def construct_query(self):
+        self.x, self.d_t, self.response_cache
         # Implement query construction logic
-        return f"Query for {self.x}"
+        return self.x + ' '.join(self.response_cache)
 
     def retrieve_document(self, query):
         # Implement document retrieval logic
         return f"Document for {query}"
 
-    def get_next_response(self, ground_truth):
+    def get_next_response(self,):
         # Implement response generation logic
-        return f"Response for {ground_truth} with document {self.d_t}"
+        self.x, self.response_cache
+        messages, answer = self.collate.templete(self.x, ' '.join(self.response_cache))
+        d_t = tensor_retuen_type(input_ids = self.d_t, attention_mask = torch.ones_like(self.d_t)).to(self.LM.device)
+        response = self.LM.pseudo_generate(messages+" "+answer, self.y[self.n], Doc_tokens = d_t)
+        
+        return response
 
     def compute_reward(self):
         # Implement reward calculation logic
-        return 1.0 if self.done else 0.0
-
+        reward=0
+        if self.action == 0:
+            if self.last_action!=self.action:
+                reward += Bert_score([self.collate.datatokenizer.decode(self.d_t[0])], [self.y[self.n]])[0]/len(self.y)
+            else:
+                reward += 0
+        elif self.action==1:
+            reward += Bert_score([self.response_cache[-1]], [self.y[self.n]])[0]/len(self.y)
+        elif self.action==2:
+            if self.n>-1:
+                reward += Bert_score([self.response_cache[-1]], [self.y[self.n]])[0]/len(self.y)
+        elif self.action==3 or self.done:
+            reward += (reward/len(self.y))**4
+        
+        return float(reward)
 
 class BertAgentCritic(nn.Module):
     def __init__(self, model_config, action_space_size):
@@ -246,7 +294,7 @@ class BertAgentCritic(nn.Module):
         self.action_space_size = action_space_size
     
     def forward(self, inputs):
-        inputs = self.tokenizer(inputs, return_tensors="pt", padding=True, truncation=True)
+        inputs = self.tokenizer(inputs, return_tensors="pt", padding=True, truncation=True).to(self.bert.device)
         # inputs['input_ids'] shape: (batch_size, sequence_length)
         # inputs['attention_mask'] shape: (batch_size, sequence_length)
         outputs = self.bert(**inputs)
@@ -281,7 +329,7 @@ class PPOTrainer:
         critic_loss = (returns - values).pow(2).mean()  # Shape: scalar
 
         entropy_loss = -log_probs.mean()  # Shape: scalar
-        return actor_loss + 0.5 * critic_loss - 0.01 * entropy_loss  # Shape: scalar
+        return actor_loss + 2. * critic_loss - 0.1 * entropy_loss  # Shape: scalar
 
     def compute_gae(self, rewards, values, dones, next_value):
         # rewards shape: (sequence_length,)
@@ -313,10 +361,10 @@ class PPOTrainer:
         for _ in range(self.update_epochs):
             for idx in range(0, len(old_states), self.batch_size):
                 batch_states = old_states[idx:idx+self.batch_size]  # Shape: (batch_size, state_size)
-                batch_actions = old_actions[idx:idx+self.batch_size]  # Shape: (batch_size,)
-                batch_old_log_probs = old_log_probs[idx:idx+self.batch_size]  # Shape: (batch_size,)
-                batch_returns = returns[idx:idx+self.batch_size]  # Shape: (batch_size,)
-                batch_advantages = advantages[idx:idx+self.batch_size]  # Shape: (batch_size,)
+                batch_actions = old_actions[idx:idx+self.batch_size].to(self.model.bert.device)  # Shape: (batch_size,)
+                batch_old_log_probs = old_log_probs[idx:idx+self.batch_size].to(self.model.bert.device)  # Shape: (batch_size,)
+                batch_returns = returns[idx:idx+self.batch_size].to(self.model.bert.device)  # Shape: (batch_size,)
+                batch_advantages = advantages[idx:idx+self.batch_size].to(self.model.bert.device)  # Shape: (batch_size,)
 
                 logits, state_values = self.model(batch_states)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
                 log_probs = Categorical(logits=logits).log_prob(batch_actions)  # Shape: (batch_size,)
@@ -333,7 +381,7 @@ if __name__=='__main__':
     
     # Example usage
     env = CustomEnv()
-    model = BertAgentCritic(config.agent_size_config, env.action_space_size)
+    model = BertAgentCritic(agent_size_config, env.action_space_size)
     trainer = PPOTrainer(model)
 
     # Training loop

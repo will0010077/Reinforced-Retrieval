@@ -6,6 +6,8 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.distributions import Categorical
+
 from tqdm import tqdm
 import yaml
 import peft
@@ -13,11 +15,7 @@ from peft.utils import _freeze_adapter, _get_submodules
 from LM.Knowledge_encoder import KnowEncoder
 from peft.tuners.adaption_prompt.config import AdaptionPromptConfig, TRANSFORMERS_MODEL_CONFIG, prepare_config
 import math
-
-
-with open('config.yaml', 'r') as yamlfile:
-    config = yaml.safe_load(yamlfile)
-
+from config import generate_config
 
 sep='</s>'
 eos='</s>'
@@ -146,6 +144,7 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
 
         return ref_logp, output
     
+    @torch.inference_mode()
     def pseudo_generate(self, messages:list[str], forcing:list[str], Doc_tokens = None, **kwargs):
         
         if Doc_tokens is not None:
@@ -224,7 +223,6 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
         if prefix is not None:
             for par in self._parents['Enc']:
                 delattr(getattr(par, self.module_name), "adaption_prompt")
-
 class LLaMa_reader(torch.nn.Module):
     def __init__(self, model_dir, device, token, from_pretrained=True):
         super().__init__()
@@ -236,7 +234,7 @@ class LLaMa_reader(torch.nn.Module):
         self.eos_id=self.tokenizer.eos_token_id
         self.eos=self.tokenizer.eos_token
 
-        self.generate_config=config['generate_config']
+        self.generate_config=generate_config
         if from_pretrained:
             self.model=AutoModelForCausalLM.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.bfloat16)
         else:
@@ -323,7 +321,9 @@ class LLaMa_reader(torch.nn.Module):
         # self.chat_history.append([message, output])[:,tokens.input_ids.shape[1]:]
         return output
     
-    def pseudo_generate(self, messages:list[str], forcing:list[str], **kwargs):
+    
+    @torch.inference_mode()
+    def pseudo_generate(self, messages:list[str], forcing:list[str], temperture = 1, **kwargs):
         if isinstance(messages, str):
             messages = [messages]
         if isinstance(forcing, str):
@@ -336,8 +336,9 @@ class LLaMa_reader(torch.nn.Module):
         tokens = tokens.to(self.model.device)
         
         LM_output, loss = self.forward(tokens, return_logits = True, **kwargs)
-
-        top_token = torch.argmax(LM_output, dim=-1)#(B,n)
+        LM_output /= temperture
+        LM_logprob = torch.log_softmax(LM_output, dim=-1)#(B,n)
+        top_token = Categorical(logits=LM_logprob).sample()
         p_generation = self.tokenizer.batch_decode([top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-2] for i in range(len(messages))], skip_special_tokens=True)
         return p_generation
         

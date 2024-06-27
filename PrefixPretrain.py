@@ -16,19 +16,14 @@ from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
 from DatasetLoader.dataset import NQADataset
 from DatasetLoader.collate_func import collate
+from config import bert_dir, LM_dir, token, enc_config, train_config
 
 from tqdm import tqdm
 import yaml
 import peft
 import os
 from socket import socket
-token = "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"
-# model_dir = "MediaTek-Research/Breeze-7B-Instruct-v0_1"
-# model_dir = "meta-llama/Llama-2-7b-chat-hf"
-bert_dir = "huggingface/bert"
-LM_dir = "huggingface/llama2"
-with open('config.yaml', 'r') as yamlfile:
-    config = yaml.safe_load(yamlfile)
+
 # torch.autograd.set_detect_anomaly(True)
 
 
@@ -52,7 +47,7 @@ def training(rank, world_size, max_epoch, model, loader, port):
     model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
     param_list =[p for p in model.parameters() if p.requires_grad]
-    optim = torch.optim.Adam(param_list, lr = config['Enc_config']['enc_lr']) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
+    optim = torch.optim.Adam(param_list, lr = enc_config.enc_lr) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
 
     iter_step = len(loader)*max_epoch
     warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.02))
@@ -73,7 +68,7 @@ def training(rank, world_size, max_epoch, model, loader, port):
                     
 
             # feed doc into KnowEnc to get prefix
-            if not config['train_config']['use_prefix']:
+            if not train_config.use_prefix:
                 a_tokens = None
             
             ref_logp, (LM_output, loss) = model.forward(qa_tokens, Doc_tokens = a_tokens)
@@ -82,7 +77,7 @@ def training(rank, world_size, max_epoch, model, loader, port):
             # loss += kl.mean() * 0.1
 
 
-            if config['train_config']['use_prefix']:
+            if train_config.use_prefix:
                 optim.zero_grad()
                 loss.backward()
                 if i%max(int(192/(world_size*bs)),1)==0:
@@ -114,11 +109,11 @@ def main():
     num_dims = LM.model.config.hidden_size
     # print(LM.model.config)
     print(f'Initialize KnowEnc with {dtype}...')
-    Encoder=KnowEncoder(dims = num_dims, **config['Enc_config'], dtype=dtype)
+    Encoder=KnowEncoder(dims = num_dims, **enc_config, dtype=dtype)
     Encoder.to(torch.bfloat16)
 
     print(f'Initialize EncTunedLM...')
-    peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=config['Enc_config']['num_layers'], adapter_len=1)}
+    peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=enc_config.num_layers, adapter_len=1)}
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
     if False:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")

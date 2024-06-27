@@ -6,7 +6,7 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 from DocBuilder.utils import inner, collate_list_to_tensor, custom_sparse_mmT, top_k_sparse
-
+from config import cluster_config
 from transformers import AutoTokenizer, AutoModel, BertTokenizerFast
 import logging
 import time, datetime
@@ -16,12 +16,7 @@ import pickle
 import random
 import yaml
 
-with open('config.yaml', 'r') as yamlfile:
-    config = yaml.safe_load(yamlfile)
 
-# seed = config['seed']
-# torch.manual_seed(seed)
-# random.seed(seed)
 device='cuda' if torch.cuda.is_available() else 'cpu'
 # device='cpu'
 
@@ -46,7 +41,7 @@ class cluster_builder(nn.Module):
         u = torch.stack(u)
         u = u*lr + mu*(1-lr)
         u = F.normalize(u, dim=-1)
-        u = top_k_sparse(u, config['cluster_config']['k_sparse']).to_dense()
+        u = top_k_sparse(u, cluster_config.k_sparse).to_dense()
 
         dis=(u-mu).norm(dim=-1).max()
 

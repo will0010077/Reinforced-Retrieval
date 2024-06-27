@@ -34,7 +34,8 @@ agent_size_config = Config(
     num_hidden_layers=4,
     num_attention_heads=12,
     hidden_size=768,
-    intermediate_size=3072
+    intermediate_size=3072,
+    max_position_embeddings = 1024,
 )
 
 lex = Config(
@@ -79,3 +80,8 @@ generate_config = Config(
 )
 
 seed = 87
+
+bert_dir = "huggingface/bert"
+LM_dir = "huggingface/llama2"
+
+token = "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"

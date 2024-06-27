@@ -3,6 +3,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from DocBuilder.utils import tensor_retuen_type
+from config import LM_dir, bert_dir
 class collateLM():
     def __init__(self, max_len=1024, tokenizer=None):
         assert tokenizer is not None
@@ -53,7 +54,7 @@ class collateLM():
 
 
 class collate():
-    def __init__(self,LM_dir, bert_dir):
+    def __init__(self, LM_dir = LM_dir, bert_dir = bert_dir):
         
         self.datatokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
         self.LMtokenizer = AutoTokenizer.from_pretrained(
@@ -104,3 +105,6 @@ class collate():
             return_tensors="pt"
         )
         return prompt, answer
+    
+    def state_templete(self, q, a, d):
+        return self.datatokenizer.decode(d[0])+self.datatokenizer.sep_token+q+self.datatokenizer.sep_token+a
