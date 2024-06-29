@@ -144,14 +144,17 @@ if __name__=="__main__":
     dataset=NQADataset(data_path=data_path)
     
     env = CustomEnv(dataset, LM, retriever, 4)
-    agent = BertAgentCritic(config.agent_size_config, env.action_space_size)
+    agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
     agent.to(device)
     
-    Agent_optim = optim.AdamW(agent.parameters(), lr = 1e-5)
-    trainer = PPOTrainer(agent, Agent_optim, update_epochs=4)
+    Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
+                               {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr},
+                               {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr}], betas = [0.9, 0.99], eps=1e-4)
+    trainer = PPOTrainer(agent, Agent_optim, lambd = 0.97, update_epochs=4)
     # Training loop
     memory = []
-    ma_reward=0.5
+    ma_reward=0.
+    reward_file = open("reward_number.txt", "w")
     for episode in range(100000):
         state = env.reset()  # Shape: string
         done = False
@@ -160,120 +163,36 @@ if __name__=="__main__":
             with torch.no_grad():
                 action_logits, state_value = agent([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
             action_logits, state_value = action_logits.cpu(), state_value.cpu()
-            action_prob = torch.softmax(action_logits, dim=-1)  # Shape: (1, action_space_size)
-            dist = Categorical(action_prob)
+            action_prob = torch.log_softmax(action_logits/1, dim=-1)  # Shape: (1, action_space_size)
+            dist = Categorical(logits = action_prob)
             if torch.rand([1])<0.05:
                 action = torch.randint(env.action_space_size, [1])
             else:
                 action = dist.sample()  # Shape: (1,)
+            
+            if episode%10==0:
+                action = torch.tensor(env.steps%3)
             print(action.item(), end='', flush=True)
             next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+            if reward!=reward: # check nan, don't know why
+                break
             memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
             reward_list.append(reward)
             state = next_state
-        print("\r"," "*40,"\r", end='')
+        print("\r"," "*80,"\r", end='')
         ma_reward = 0.95*ma_reward + 0.05*sum(reward_list)
+        reward_file.write(f"{ma_reward:.5f}\n")
         print("reward: ",ma_reward, end="\r")
-        if episode%16==0:
+        if len(memory)>512:
+            reward_file.flush()
             trainer.update(memory)
             memory=[]
+        if (episode+1)%2000==0:
+            #save Agent weight
+            torch.save(agent.state_dict(), "./save/Agent.pt")
     exit()
     
     
-    print('Loading dataset...')
-    data_path='data/cleandata.jsonl'
-    dataset=NQADataset(data_path=data_path)
-    # dataset.data=dataset.data[:5]*10000
-    loader = DataLoader(dataset, batch_size = 1, shuffle=True)
-    
-    
-    collate_fn = collate(LM_dir, bert_dir)
-    ma_loss=10
-    ma_reward=-2
-    iter=0
-    
-    for epoch in range(max_epoch):
-        train_bar=tqdm(loader, ncols=0)
-        stream = torch.cuda.current_stream()
-        qry_buffer, res_buffer, re_buffer = [],[],[]
-        
-        for query, target in train_bar:
-            B = len(query)
-            
-            
-            # send to gpu to retrieval loop
-            doc_set = ['']*len(query)
-            # a = Agent(q, d, y)
-            #target = target.split()
-            
-            for i, y in enumerate(target):
-                # Initialize
-                y:list[str] = y.split(' ')
-                chunk_size = 10
-                y = [' '.join(y[i:i+chunk_size]) for i in range(0,len(y), chunk_size)]
-                messages = state_template([query[i]], [target[i]], [''])
-                res_cache = ['']
-                rewards=[]
-                n = -1
-                # RL loop
-                T=len(y)
-                for t in range(T):
-                    # select action
-                    query_tensors = gpt2tokenizer(messages, max_length=256, truncation=True).input_ids
-                    query_tensors = [torch.tensor(q) for q in query_tensors]
-                    #### Get response from SFTModel
-                    response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
-                    response = [gpt2tokenizer.decode(r[len(q):],skip_special_tokens=True) for q, r in zip(query_tensors, response_tensors)]
-                    print(response)
-                    #### Retrieve
-                    dt, zt = retriever.retrieve(query[i]+' '.join(res_cache), k=1, num_search=4)
-                    dt = dt.squeeze(1)
-                    dt = tensor_retuen_type(input_ids = dt, attention_mask = torch.ones_like(dt)).to(device)
-                    
-                    #### Take the action and Compute reward
-                    n = n+1
-                    qa_tokens, unlabel, unlabel_str, q_str, a_str, a_tokens = collate_fn.collate_qa([(query[i], y[i])])
-                    p_generation = LM.pseudo_generate(unlabel_str[0]+' '.join(res_cache), y[n], Doc_tokens = dt)
-                    res_cache += p_generation
-                    pseudo_bert=Bert_score(p_generation, [y[n]])
-                    qry_buffer.extend(query_tensors)
-                    res_buffer.extend(response_tensors)
-                    re_buffer.extend(pseudo_bert)
-                
-                # update replay buffer
-                
-            
-            #### Run PPO step
-            train_bar.set_postfix_str(f'len: {len(re_buffer)}, reward: {sum(re_buffer)/len(re_buffer):.3f}')
-            if len(re_buffer)>=RL_bs:
-                stats = ppo_trainer.step(qry_buffer[:RL_bs], res_buffer[:RL_bs], re_buffer[:RL_bs])
-                qry_buffer, res_buffer, re_buffer = qry_buffer[RL_bs:], res_buffer[RL_bs:], re_buffer[RL_bs:]
-            
-            # END of T
-                    
-
-                
-
-            
-            # policy.to('cpu')
-            # retriever.to('cpu')
-            
-            
-            
-            # print(ret.shape, outputs.shape, doc_set.shape)#torch.Size([8, #ret+1, 30522]) torch.Size([8, #ret+1, 30522]) torch.Size([8, #ret, n])
-            
-            # doc = [retriever.tokenizer.batch_decode(doc_set[i]) for i in range(len(doc_set))]
-
-            # if iter%100==0:
-            #     with open("moniter.txt", 'a') as f:
-            #         f.write(question_str[0] + LM.generate(question_str[0], prefix = [p[0:1] for p in prefix])[0] + '\n')
-            #         f.write('Ground Truth: '+ target[0])
-                    
-                
-            iter+=1
-            
-                    
-
             
         
 

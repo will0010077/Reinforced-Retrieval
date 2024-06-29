@@ -8,7 +8,7 @@ train_config = Config(
     spilt=0.95,
     num_samples=None,
     lm_lr=1.e-5,
-    agent_lr=0.e-5,
+    agent_lr=3.e-5,
     betas=[0.8, 0.998],
     weight_decay=0.01,
     topk=1,
@@ -31,7 +31,7 @@ enc_size_config = Config(
 )
 
 agent_size_config = Config(
-    num_hidden_layers=4,
+    num_hidden_layers=8,
     num_attention_heads=12,
     hidden_size=768,
     intermediate_size=3072,

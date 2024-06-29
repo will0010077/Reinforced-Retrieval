@@ -2,6 +2,7 @@ __pycache__
 *.json
 *.jsonl
 *.pt
+*.pth
 *.pdf
 *.zip
 *.log

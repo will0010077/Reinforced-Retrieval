@@ -323,7 +323,7 @@ class LLaMa_reader(torch.nn.Module):
     
     
     @torch.inference_mode()
-    def pseudo_generate(self, messages:list[str], forcing:list[str], temperture = 1, **kwargs):
+    def pseudo_generate(self, messages:list[str], forcing:list[str], temperture = 1, return_prob = False,  **kwargs):
         if isinstance(messages, str):
             messages = [messages]
         if isinstance(forcing, str):
@@ -332,14 +332,20 @@ class LLaMa_reader(torch.nn.Module):
         unlabel = self.tokenizer(text=messages).input_ids
         unlabel_len = [len(m) for m in unlabel]
         # print(max([len(s) for s in unlabel]))
-        tokens = self.tokenizer(text=cat, return_tensors='pt', padding=True, max_length=512, truncation =True,)
+        tokens = self.tokenizer(text=cat, return_tensors='pt', padding=True, max_length=1024, truncation =True,)
         tokens = tokens.to(self.model.device)
         
         LM_output, loss = self.forward(tokens, return_logits = True, **kwargs)
         LM_output /= temperture
         LM_logprob = torch.log_softmax(LM_output, dim=-1)#(B,n)
-        top_token = Categorical(logits=LM_logprob).sample()
-        p_generation = self.tokenizer.batch_decode([top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-2] for i in range(len(messages))], skip_special_tokens=True)
+        dist = Categorical(logits=LM_logprob)
+        
+        top_token = dist.sample()
+        p_generation = self.tokenizer.batch_decode([top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-2] for i in range(len(messages))], skip_special_tokens=False)
+        if return_prob:
+            log_prob = dist.log_prob(top_token)
+            token_prob = [log_prob[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-2].cpu() for i in range(len(messages))]
+            return p_generation, token_prob
         return p_generation
         
 
