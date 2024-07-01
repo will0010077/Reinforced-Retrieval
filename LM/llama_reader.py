@@ -103,9 +103,138 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
         output = output.to(previous_dtype)
         return output, None, past_key_value
 
+class LLaMa_reader(torch.nn.Module):
+    def __init__(self, model_dir, device, token, from_pretrained=True):
+        super().__init__()
+        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, lstrip=False, token=token)
+        self.tokenizer.model_max_length=2048
+        self.tokenizer.padding_side='left'
+        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.eos_id=self.tokenizer.eos_token_id
+        self.eos=self.tokenizer.eos_token
+
+        self.generate_config=generate_config
+        if from_pretrained:
+            self.model=AutoModelForCausalLM.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.bfloat16)
+        else:
+            LM_config = LlamaConfig.from_pretrained(model_dir, token=token, device_map=device)
+            self.model=LlamaForCausalLM(LM_config).to(LM_config.torch_dtype)
+            self.model.generation_config = GenerationConfig.from_pretrained(model_dir)
+        self.dtype = self.model.config.torch_dtype
+        # print(self.model)
+        self.model.generation_config.pad_token_id = self.tokenizer.pad_token_id
+        self.model.generation_config.stop_strings=[]
+        self.model.train(True)
+        self.model.requires_grad_(False)
+        self.config = self.model.config
+        # for par in self.model._parents['Enc']:
+        #     getattr(par, self.module_name).adaption_gate.requires_grad_(True)
+        # for p in self.model.parameters():
+        #     p.requires_grad_(False)
+        self.chat_history = []
+        self.system_prompt = ''
+        self.external=None
+    @property
+    def device(self):
+        return self.model.device
+    def forward(self, tokens, return_logits = False)->tuple[Tensor, Tensor]:
+        '''
+        forward function for teacher forcing\\
+        the shape of tokens is (B,n)\\
+        output: lm_logits(B,n), loss(B)
+        '''
+
+        # print(self.model.model.model.embed_tokens.weight.device, tokens.input_ids.device, prefix[0].device)
+        
+        output = self.model(**tokens)
+        lm_logits:Tensor = output.logits
+        labels:Tensor
+        if not return_logits:
+            del output.logits
+        del output.past_key_values
+        loss=None
+
+        labels = tokens.get('labels', None)
+        if labels is not None:
+            del tokens['labels']
+            # Shift so that tokens < n predict n
+
+            logp = torch.log_softmax(lm_logits, dim=-1)
+            shift_logp = logp[..., :-1, :]
+            labels[tokens['attention_mask']==0]=-100
+            shift_labels = labels[..., 1:]
+            
+            loss = -shift_logp[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
+            mask = shift_labels==-100
+            loss = loss.masked_fill_(mask, 0)
+            
+            loss = loss.sum(-1)/(~mask).sum(-1)
+
+        
+        return lm_logits, loss
+
+    @torch.inference_mode()
+    def generate(self, message, cache = None,  max_new_tokens = 1024, streamer=False, stop_strings=[], decode = True):
+        '''
+        for inference, batch size is one.
+        '''
+        #tokenize
+        if streamer:
+            streamer = TextStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+        else:
+            streamer = None
+        tokens = self.tokenizer(message, padding=True ,truncation=True,return_tensors='pt')
+        tokens = tokens.to(self.model.device)
+        
+        self.model.generation_config.stop_strings.extend(stop_strings)
+        outputs = self.model.generate(**tokens,
+                                        streamer=streamer,
+                                        max_new_tokens=max_new_tokens,
+                                        past_key_values = cache,
+                                        **self.generate_config)
+        
+        [self.model.generation_config.stop_strings.pop(-1) for _ in range(len(stop_strings))]
+
+        outputs = [outputs[j][len(tokens.input_ids[0]):].cpu() for j in range(len(tokens.input_ids))]
+        if decode:
+            outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=False)
+        # self.chat_history.append([message, output])[:,tokens.input_ids.shape[1]:]
+        return outputs
+    
+    
+    @torch.inference_mode()
+    def pseudo_generate(self, messages:list[str], forcing:list[str], temperture = 1, return_prob = False, decode = True,  **kwargs):
+        if isinstance(messages, str):
+            messages = [messages]
+        if isinstance(forcing, str):
+            forcing = [forcing]
+        cat = [m+" "+f+self.eos for m, f in zip(messages, forcing)]
+        unlabel = self.tokenizer(text=messages).input_ids
+        unlabel_len = [len(m) for m in unlabel]
+        # print(max([len(s) for s in unlabel]))
+        tokens = self.tokenizer(text=cat, return_tensors='pt', padding=True, max_length=1024, truncation =True,)
+        tokens = tokens.to(self.model.device)
+        
+        lm_logits, loss = self.forward(tokens, return_logits = True, **kwargs)
+        dist = Categorical(logits=torch.log_softmax(lm_logits/1, dim=-1))
+        
+        top_token = dist.sample()
+        cut_token = [top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1] for i in range(len(messages))]
+        if decode:
+            output = self.tokenizer.batch_decode(cut_token, skip_special_tokens=False)
+        else:
+            output = cut_token
+        if return_prob:
+            log_prob = dist.log_prob(top_token)
+            token_prob = [log_prob[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1].cpu() for i in range(len(messages))]
+            return output, token_prob
+        return output
+        
+
 class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
 
-    def __init__(self, LM:AutoModelForCausalLM, Enc:KnowEncoder, configs: Dict, adapter_name: str):
+    def __init__(self, LM:LLaMa_reader, Enc:KnowEncoder, configs: Dict, adapter_name: str):
         
         nn.Module.__init__(self)
         self.model = LM
@@ -223,132 +352,6 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
         if prefix is not None:
             for par in self._parents['Enc']:
                 delattr(getattr(par, self.module_name), "adaption_prompt")
-class LLaMa_reader(torch.nn.Module):
-    def __init__(self, model_dir, device, token, from_pretrained=True):
-        super().__init__()
-        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, lstrip=False, token=token)
-        self.tokenizer.model_max_length=2048
-        self.tokenizer.padding_side='left'
-        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.eos_id=self.tokenizer.eos_token_id
-        self.eos=self.tokenizer.eos_token
-
-        self.generate_config=generate_config
-        if from_pretrained:
-            self.model=AutoModelForCausalLM.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.bfloat16)
-        else:
-            LM_config = LlamaConfig.from_pretrained(model_dir, token=token, device_map=device)
-            self.model=LlamaForCausalLM(LM_config).to(LM_config.torch_dtype)
-            self.model.generation_config = GenerationConfig.from_pretrained(model_dir)
-        self.dtype = self.model.config.torch_dtype
-        # print(self.model)
-        self.model.generation_config.pad_token_id = self.tokenizer.pad_token_id
-        self.model.generation_config.stop_strings=[]
-        self.model.train(True)
-        self.model.requires_grad_(False)
-        self.config = self.model.config
-        # for par in self.model._parents['Enc']:
-        #     getattr(par, self.module_name).adaption_gate.requires_grad_(True)
-        # for p in self.model.parameters():
-        #     p.requires_grad_(False)
-        self.chat_history = []
-        self.system_prompt = ''
-        self.external=None
-    @property
-    def device(self):
-        return self.model.device
-    def forward(self, tokens, return_logits = False)->tuple[Tensor, Tensor]:
-        '''
-        forward function for teacher forcing\\
-        the shape of ids, target, masks is (B,n)\\
-        the shape of prefix is tuple[(B, n, dim)]\\
-        '''
-
-        # print(self.model.model.model.embed_tokens.weight.device, tokens.input_ids.device, prefix[0].device)
-        
-        output = self.model(**tokens)
-        lm_logits:Tensor = output.logits
-        logp = torch.log_softmax(lm_logits, dim=-1)
-        labels:Tensor
-        if not return_logits:
-            del output.logits
-        del output.past_key_values
-        loss=None
-
-        labels = tokens.get('labels', None)
-        if labels is not None:
-            del tokens['labels']
-            # Shift so that tokens < n predict n
-
-            shift_logp = logp[..., :-1, :]
-            labels[tokens['attention_mask']==0]=-100
-            shift_labels = labels[..., 1:]
-            
-            loss = -shift_logp[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
-            mask = shift_labels==-100
-            loss = loss.masked_fill_(mask, 0)
-            
-            loss = loss.sum(-1)/(~mask).sum(-1)
-
-        
-        return logp, loss
-
-    @torch.inference_mode()
-    def generate(self, message, cache = None,  max_new_tokens = 1024, streamer=False, stop_strings=[]):
-        '''
-        for inference, batch size is one.
-        '''
-        #tokenize
-        if streamer:
-            streamer = TextStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
-        else:
-            streamer = None
-        tokens = self.tokenizer(message, padding=True ,truncation=True,return_tensors='pt')
-        tokens = tokens.to(self.model.device)
-        
-        self.model.generation_config.stop_strings.extend(stop_strings)
-        outputs = self.model.generate(**tokens,
-                                        streamer=streamer,
-                                        max_new_tokens=max_new_tokens,
-                                        past_key_values = cache,
-                                        **self.generate_config)
-        
-        [self.model.generation_config.stop_strings.pop(-1) for _ in range(len(stop_strings))]
-
-        outputs = [outputs[j][len(tokens.input_ids[0]):] for j in range(len(tokens.input_ids))]
-        output = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        # self.chat_history.append([message, output])[:,tokens.input_ids.shape[1]:]
-        return output
-    
-    
-    @torch.inference_mode()
-    def pseudo_generate(self, messages:list[str], forcing:list[str], temperture = 1, return_prob = False,  **kwargs):
-        if isinstance(messages, str):
-            messages = [messages]
-        if isinstance(forcing, str):
-            forcing = [forcing]
-        cat = [m+" "+f+self.eos for m, f in zip(messages, forcing)]
-        unlabel = self.tokenizer(text=messages).input_ids
-        unlabel_len = [len(m) for m in unlabel]
-        # print(max([len(s) for s in unlabel]))
-        tokens = self.tokenizer(text=cat, return_tensors='pt', padding=True, max_length=1024, truncation =True,)
-        tokens = tokens.to(self.model.device)
-        
-        LM_output, loss = self.forward(tokens, return_logits = True, **kwargs)
-        LM_output /= temperture
-        LM_logprob = torch.log_softmax(LM_output, dim=-1)#(B,n)
-        dist = Categorical(logits=LM_logprob)
-        
-        top_token = dist.sample()
-        p_generation = self.tokenizer.batch_decode([top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-2] for i in range(len(messages))], skip_special_tokens=False)
-        if return_prob:
-            log_prob = dist.log_prob(top_token)
-            token_prob = [log_prob[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-2].cpu() for i in range(len(messages))]
-            return p_generation, token_prob
-        return p_generation
-        
-
 '''We have 40 pounds of product ready to ship, ready to go.
 
 Are you ready?

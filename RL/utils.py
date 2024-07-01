@@ -3,6 +3,7 @@ import sys
 sys.path.append('..')
 import torch
 from torch import Tensor, nn
+from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import math
 from DocBuilder.Retriever_k_means import inner
@@ -179,15 +180,16 @@ class Transformer_Agent(nn.Module):
         flops_loss = torch.abs(outputs).sum(-1)**2
         return pi_loss, v_loss, reg_loss, flops_loss   
 
-class CustomEnv:
-    def __init__(self, dataset, LM:EncTunedLM, ret:doc_retriever, action_space_size):
+class LLMEnv:
+    def __init__(self, dataset, LM:EncTunedLM, ret:doc_retriever, action_space_size, history_len = 8):
         self.dataset = dataset  # List of tuples (x, y)
         self.action_space_size = action_space_size
+        self.history_len = 8
         self.LM = LM
+        self.eos_id = self.LM.tokenizer.eos_token_id
         self.ret = ret
         self.current_index = 0
         self.collate = collate()
-        self.reset()
 
     def reset(self):
         self.current_data = self.dataset[random.randrange(len(self.dataset))]
@@ -199,7 +201,7 @@ class CustomEnv:
         
         self.d_t, zt = self.ret.retrieve(self.x, k=1, num_search=4)
         self.d_t = self.d_t.squeeze(1)
-        self.hat_y_t = ""
+        self.hat_y_t = None
         self.response_cache = [self.hat_y_t]
         self.n = -1  # Initialize n to -1
         self.done = False
@@ -209,7 +211,7 @@ class CustomEnv:
         return self.get_state()
 
     def get_state(self)->str:
-        state = self.collate.state_templete(self.x, " ".join(self.response_cache), self.d_t, self.action_history)
+        state = self.collate.state_templete(self.x, self.cat_response(self.response_cache[-self.history_len:]), self.d_t, self.action_history)
         return state
 
     def step(self, action):
@@ -228,8 +230,7 @@ class CustomEnv:
                 self.n += 1
                 self.hat_y_t, self.log_prob = self.get_next_response()
                 self.response_cache.append(self.hat_y_t[0])
-            elif self.n+1 == len(self.y):
-                reward += -1 # Panalty to too long response
+            else:
                 self.done=True
         elif action == 2:  # Rewrite Current Response
             self.action_history.append("rewrite")
@@ -241,8 +242,9 @@ class CustomEnv:
                 reward+=-1
         elif action == 3:  # Output Answer
             self.done = True
-
-        if len(self.action_history)>8:
+        # if self.hat_y_t!=None and self.eos_id in self.hat_y_t[0]:
+        #     self.done=True
+        if len(self.action_history)>self.history_len:
             self.action_history.pop(0)
         self.steps += 1
         if self.steps>3*len(self.y):
@@ -256,58 +258,116 @@ class CustomEnv:
     def compute_reward(self):
         # Implement reward calculation logic
         reward=0
-        if self.action == 0:
-            if self.last_action!=self.action:
+        if self.action==3 or self.done:
+            if self.n>-1:
+                reward += Bert_score([self.cat_response(self.response_cache)], [" ".join(self.y)])[0]
+        elif self.action == 0:
+            if self.last_action!=0:
                 reward += Bert_score([self.collate.datatokenizer.decode(self.d_t[0])], [self.y[self.n]])[0]/len(self.y)
-            elif self.last_action==2:
-                reward += 0.05
         elif self.action==1:
-            reward += Bert_score([self.response_cache[-1]], [self.y[self.n]])[0]/len(self.y)
+            reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
             reward += self.log_prob[0].exp().mean()/len(self.y)
-            if self.last_action==0:
-                reward+=0.05
+            reward *= 1.1
         elif self.action==2:
             if self.n>-1:
-                reward += Bert_score([self.response_cache[-1]], [self.y[self.n]])[0]/len(self.y)
+                reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
                 reward += self.log_prob[0].exp().mean()/len(self.y)
-            if self.last_action==1 or self.last_action==2:
-                reward+=0.05
-        elif self.action==3 or self.done:
-            if self.n>-1:
-                reward += Bert_score([" ".join(self.response_cache)], [" ".join(self.y)])[0]
         
         return float(reward)
     
     def construct_query(self):
         self.x, self.d_t, self.response_cache
         # Implement query construction logic
-        return self.x + ' '.join(self.response_cache)
+        return self.x + self.cat_response(self.response_cache[-self.history_len:])
 
-    def retrieve_document(self, query):
-        # Implement document retrieval logic
-        return f"Document for {query}"
-
+    def cat_response(self, cache:list[Tensor])->str:
+        if cache[0]==None:
+            cache = cache[1:]
+        if len(cache)==0:
+            return ""
+        
+        s = self.LM.tokenizer.decode(torch.cat(cache))
+        return s
     def get_next_response(self,):
         # Implement response generation logic
-        self.x, self.response_cache
-        messages, answer = self.collate.templete(self.x, ' '.join(self.response_cache))
+        # messages, answer = self.collate.templete(self.x, ' '.join(self.response_cache))
+        messages, answer = self.collate.templete(self.x, self.cat_response(self.response_cache))
         d_t = tensor_retuen_type(input_ids = self.d_t, attention_mask = torch.ones_like(self.d_t)).to(self.LM.device)
-        response, log_prob = self.LM.pseudo_generate(messages+" "+answer, self.y[self.n], Doc_tokens = d_t, return_prob = True)
+        # print("What is feeded:",messages+" "+answer, self.y[self.n])
+        response, log_prob = self.LM.pseudo_generate(messages+" "+answer, self.y[self.n], Doc_tokens = d_t, return_prob = True, decode = False)
         
         return response, log_prob
 
-
+class LLMEnv_test(LLMEnv):
+    
+    
+    def reset(self, x):
+        self.x =x
+        chunk_size = 10
+        
+        self.d_t, zt = self.ret.retrieve(self.x, k=1, num_search=4)
+        self.d_t = self.d_t.squeeze(1)
+        self.hat_y_t = None
+        self.response_cache = [self.hat_y_t]
+        self.done = False
+        self.steps = 0
+        self.last_action=-1
+        self.action_history = []
+        return self.get_state()
+    
+    def step(self, action):
+        reward = 0
+        self.action = action
+        if action == 0:  # Retrieve Document
+            self.action_history.append("retrieve")
+            if self.last_action!=0:
+                q_t = self.construct_query()
+                self.d_t, zt = self.ret.retrieve(q_t, k=1, num_search=4)
+                self.d_t = self.d_t.squeeze(1)
+                self.hat_y_t = self.hat_y_t  # Keep current response
+        elif action == 1:  # Proceed Response
+            self.action_history.append("proceed")
+            self.hat_y_t = self.get_next_response()
+            self.response_cache.append(self.hat_y_t[0])
+        elif action == 2:  # Rewrite Current Response
+            self.action_history.append("rewrite")
+            if len(self.response_cache)>1:
+                self.response_cache.pop()
+                self.hat_y_t = self.get_next_response()
+                self.response_cache.append(self.hat_y_t[0])
+        elif action == 3:  # Output Answer
+            self.done = True
+        if self.eos_id in self.hat_y_t[0]:
+            self.done=True
+        if len(self.action_history)>self.history_len:
+            self.action_history.pop(0)
+        self.steps += 1
+        next_state = self.get_state()
+        
+        self.last_action=self.action
+        return next_state, reward, self.done, {}
+    def compute_reward(self):
+        return 0
+    def get_next_response(self,):
+        # Implement response generation logic
+        messages, answer = self.collate.templete(self.x, self.cat_response(self.response_cache))
+        d_t = tensor_retuen_type(input_ids = self.d_t, attention_mask = torch.ones_like(self.d_t)).to(self.LM.device)
+        response = self.LM.generate(messages+" "+answer, Doc_tokens = d_t, max_new_tokens=15, decode = False)
+        
+        return response
 class BertAgentCritic(nn.Module):
     def __init__(self, model_config, action_space_size):
         super(BertAgentCritic, self).__init__()
         self.bert = BertModel(BertConfig(**model_config))
         self.tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+        self.tokenizer.model_max_length = 1024
         self.action_head = nn.Linear(self.bert.config.hidden_size, action_space_size)
         self.value_head = nn.Linear(self.bert.config.hidden_size, 1)
         self.action_space_size = action_space_size
     
-    def forward(self, inputs):
-        inputs = self.tokenizer(inputs, return_tensors="pt", padding=True, truncation=True).to(self.bert.device)
+    def forward(self, state = None, inputs = None):
+        if inputs==None:
+            inputs = self.tokenizer(state, return_tensors="pt", padding=True, truncation=True).to(self.bert.device)
         # inputs['input_ids'] shape: (batch_size, sequence_length)
         # inputs['attention_mask'] shape: (batch_size, sequence_length)
         outputs = self.bert(**inputs)
@@ -318,7 +378,7 @@ class BertAgentCritic(nn.Module):
         return action_logits, state_value  # Shapes: (batch_size, action_space_size), (batch_size,)
 
 class PPOTrainer:
-    def __init__(self, model, optimizer, gamma=0.99, clip_epsilon=0.2, lambd=0.95, update_epochs=4, batch_size=32, grad_step = 4):
+    def __init__(self, model:BertAgentCritic, optimizer, gamma=0.99, clip_epsilon=0.2, lambd=0.95, update_epochs=4, batch_size=32, grad_step = 4):
         self.model = model
         self.optimizer = optimizer
         self.gamma = gamma
@@ -359,7 +419,14 @@ class PPOTrainer:
             gae = delta + self.gamma * self.lambd * (1 - dones[step]) * gae  # Shape: scalar
             returns.insert(0, gae + values[step])  # Shape: scalar
         return returns  # Shape: (sequence_length,)
-
+    def f(self,batch):
+        batch_states, batch_actions, batch_old_log_probs, batch_returns, batch_advantages = zip(*batch)
+        batch_token = self.model.tokenizer(batch_states, return_tensors = "pt", padding = True, truncation=True)
+        batch_actions = torch.stack(batch_actions)
+        batch_old_log_probs = torch.stack(batch_old_log_probs)
+        batch_returns = torch.stack(batch_returns)
+        batch_advantages = torch.stack(batch_advantages)
+        return batch_token, batch_actions, batch_old_log_probs, batch_returns, batch_advantages
     def update(self, memory):
         old_states, old_actions, old_log_probs, rewards, dones, values = zip(*memory)
         returns = self.compute_gae(rewards, values, dones, next_value=0)
@@ -369,20 +436,20 @@ class PPOTrainer:
         old_log_probs = torch.tensor(old_log_probs, dtype=torch.float32)  # Shape: (memory_size,)
         returns = torch.tensor(returns, dtype=torch.float32)  # Shape: (memory_size,)
         values = torch.tensor(values, dtype=torch.float32)  # Shape: (memory_size,)
-
         advantages = returns - values  # Shape: (memory_size,)
-
+        
+        loader = DataLoader([*zip(old_states, old_actions, old_log_probs, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True)
         step = 0
         for _ in range(self.update_epochs):
-            for idx in range(0, len(old_states), self.batch_size):
+            for batch_token, batch_actions, batch_old_log_probs, batch_returns, batch_advantages in loader:
                 step+=1
-                batch_states = old_states[idx:idx+self.batch_size]  # Shape: (batch_size, state_size)
-                batch_actions = old_actions[idx:idx+self.batch_size].to(self.model.bert.device)  # Shape: (batch_size,)
-                batch_old_log_probs = old_log_probs[idx:idx+self.batch_size].to(self.model.bert.device)  # Shape: (batch_size,)
-                batch_returns = returns[idx:idx+self.batch_size].to(self.model.bert.device)  # Shape: (batch_size,)
-                batch_advantages = advantages[idx:idx+self.batch_size].to(self.model.bert.device)  # Shape: (batch_size,)
+                batch_token = batch_token.to(self.model.bert.device)  # Shape: (batch_size, n)
+                batch_actions = batch_actions.to(self.model.bert.device)  # Shape: (batch_size,)
+                batch_old_log_probs = batch_old_log_probs.to(self.model.bert.device)  # Shape: (batch_size,)
+                batch_returns = batch_returns.to(self.model.bert.device)  # Shape: (batch_size,)
+                batch_advantages = batch_advantages.to(self.model.bert.device)  # Shape: (batch_size,)
 
-                logits, state_values = self.model(batch_states)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
+                logits, state_values = self.model.forward(inputs = batch_token)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
                 log_probs = Categorical(logits=logits.float()).log_prob(batch_actions)  # Shape: (batch_size,)
 
                 loss = self.ppo_loss(batch_old_log_probs, log_probs, batch_advantages, batch_returns, state_values)  # Shape: scalar
@@ -397,7 +464,7 @@ if __name__=='__main__':
     
     
     # Example usage
-    env = CustomEnv()
+    env = LLMEnv()
     model = BertAgentCritic(agent_size_config, env.action_space_size)
     trainer = PPOTrainer(model)
 

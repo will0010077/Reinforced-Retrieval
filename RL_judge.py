@@ -143,20 +143,24 @@ if __name__=="__main__":
     data_path='data/cleandata.jsonl'
     dataset=NQADataset(data_path=data_path)
     
-    env = CustomEnv(dataset, LM, retriever, 4)
+    env = LLMEnv(dataset, LM, retriever, 3)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
+    agent.bert.load_state_dict(torch.load("./save/Agent_06_30.pt"),strict=False)
     agent.to(device)
     
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr}], betas = [0.9, 0.99], eps=1e-4)
-    trainer = PPOTrainer(agent, Agent_optim, lambd = 0.97, update_epochs=4)
+    trainer = PPOTrainer(agent, Agent_optim, lambd = 0.95, update_epochs=4, batch_size = 32, grad_step = 4)
     # Training loop
+    total = 100000
+    scheduler = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
     memory = []
     ma_reward=0.
     reward_file = open("reward_number.txt", "w")
-    for episode in range(100000):
+    for episode in range(total):
         state = env.reset()  # Shape: string
+        print(env.y)
         done = False
         reward_list = []
         while not done:
@@ -170,23 +174,26 @@ if __name__=="__main__":
             else:
                 action = dist.sample()  # Shape: (1,)
             
-            if episode%10==0:
-                action = torch.tensor(env.steps%3)
+            # if episode%20==0:
+            #     action = torch.tensor(env.steps%3)
             print(action.item(), end='', flush=True)
             next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             if reward!=reward: # check nan, don't know why
+                print("NAN!!!!")
                 break
             memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
             reward_list.append(reward)
             state = next_state
-        print("\r"," "*80,"\r", end='')
+        # print("\r"," "*80,"\r", end='\n')
+        print(env.cat_response(env.response_cache))
         ma_reward = 0.95*ma_reward + 0.05*sum(reward_list)
         reward_file.write(f"{ma_reward:.5f}\n")
         print("reward: ",ma_reward, end="\r")
-        if len(memory)>512:
+        if len(memory)>768:
             reward_file.flush()
+            memory = memory[-512:]
             trainer.update(memory)
-            memory=[]
+        scheduler.step()
         if (episode+1)%2000==0:
             #save Agent weight
             torch.save(agent.state_dict(), "./save/Agent.pt")

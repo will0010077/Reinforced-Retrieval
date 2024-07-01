@@ -208,6 +208,7 @@ def text_normal(text):
     text=re.sub("(<[^<>]{1,20}>)", '', text)
     text = re.sub(" +", " ", text)
     replace_word = {" \'s": "\'s",
+    "s \' ": "s\' ",
     " \'m": "\'m",
     " \'d": "\'d",
     " \'ll": "\'ll",

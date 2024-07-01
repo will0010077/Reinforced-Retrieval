@@ -71,9 +71,9 @@ data_config = Config(
 
 generate_config = Config(
     no_repeat_ngram_size=6,
-    do_sample=False,
-    temperature=None,
-    top_p=None,
+    do_sample=True,
+    temperature=1,
+    top_p=0.7,
     top_k=None,
     num_beams=1,
     bad_words_ids=None
