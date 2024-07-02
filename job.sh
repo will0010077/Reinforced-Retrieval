@@ -4,8 +4,8 @@
 #SBATCH -e para.log # SLURM standard error to file
 #SBATCH --nodes=1 # Require nodes to be used
 #SBATCH --ntasks-per-node=1 # tasks/processes 
-#SBATCH --cpus-per-task=8 #  CPU cores to be used 
-#SBATCH --gres=gpu:8 # Require 8 GPUs to be used
+#SBATCH --cpus-per-task=2 #  CPU cores to be used 
+#SBATCH --gres=gpu:1 # Require 8 GPUs to be used
 #SBATCH --mem=128G # memory required per node
 #SBATCH --time=12:00:00 # Set time of the job
 #SBATCH -p defq # Partition/Queue name
@@ -23,4 +23,6 @@ module list
 #==========================
 # srun conda init
 # srun conda activate RLR
-srun python3 PrefixPretrain.py
+# srun python3 PrefixPretrain.py
+# srun python3 EncLM_inference.py
+srun python3 RL_judge.py
