@@ -149,12 +149,12 @@ if __name__=="__main__":
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr}], betas = [0.9, 0.99], eps=1e-4)
-    trainer = PPOTrainer(agent, Agent_optim, lambd = 0.95, update_epochs=4, batch_size = 64, grad_step = 2)
+    trainer = PPOTrainer(agent, Agent_optim, lambd = 0.97, update_epochs=4, batch_size = 64, grad_step = 2)
     # Training loop
     total = 100000
     scheduler = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
     memory = []
-    ma_reward=0.
+    ma_reward=1.5
     reward_file = open("reward_number.txt", "w")
     for episode in range(total):
         state = env.reset()  # Shape: string
@@ -182,13 +182,14 @@ if __name__=="__main__":
             reward_list.append(reward)
             state = next_state
         # print("\r"," "*80,"\r", end='\n')
-        print(env.cat_response(env.response_cache))
+        # print(env.cat_response(env.response_cache))
         ma_reward = 0.95*ma_reward + 0.05*sum(reward_list)
         reward_file.write(f"{ma_reward:.5f}\n")
-        print("reward: ",ma_reward, end="\r")
+        print("\nreward: ",ma_reward, end="\r")
         if len(memory)>768:
             reward_file.flush()
             memory = memory[-512:]
+            print()
             trainer.update(memory)
         scheduler.step()
         if (episode+1)%2000==0:

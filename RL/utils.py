@@ -247,7 +247,7 @@ class LLMEnv:
         if len(self.action_history)>self.history_len:
             self.action_history.pop(0)
         self.steps += 1
-        if self.steps>3*len(self.y):
+        if self.steps>3*len(self.y)+5:
             self.done=True
         reward = reward + self.compute_reward()
         next_state = self.get_state()
@@ -260,18 +260,20 @@ class LLMEnv:
         reward=0
         if self.action==3 or self.done:
             if self.n>-1:
-                reward += Bert_score([self.cat_response(self.response_cache)], [" ".join(self.y)])[0]
+                reward += 2*Bert_score([self.cat_response(self.response_cache)], [" ".join(self.y)])[0]
+                reward+= ((self.n+1)/len(self.y))**2
+                
         elif self.action == 0:
             if self.last_action!=0:
-                reward += Bert_score([self.collate.datatokenizer.decode(self.d_t[0])], [self.y[self.n]])[0]/len(self.y)
+                reward += Bert_score([self.collate.datatokenizer.decode(self.d_t[0])], [" ".join(self.y)])[0]/len(self.y)
         elif self.action==1:
             reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
-            reward += self.log_prob[0].exp().mean()/len(self.y)
+            reward += 0.5*self.log_prob[0].exp().mean()/len(self.y)
             reward *= 1.1
         elif self.action==2:
             if self.n>-1:
                 reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
-                reward += self.log_prob[0].exp().mean()/len(self.y)
+                reward += 0.5*self.log_prob[0].exp().mean()/len(self.y)
         
         return float(reward)
     
@@ -390,25 +392,25 @@ class PPOTrainer:
         
         self.action_coef=1
         self.value_coef=2
-        self.entropy_coef=0.001
+        self.entropy_coef=2**-10
 
-    def ppo_loss(self, old_log_probs, log_probs, advantages, returns, values):
+    def ppo_loss(self, old_log_probs, dist:Categorical, batch_actions, advantages, returns, values):
         # old_log_probs shape: (batch_size,)
-        # log_probs shape: (batch_size,)
+        # batch_action shape: (batch_size,)
         # advantages shape: (batch_size,)
         # returns shape: (batch_size,)
         # values shape: (batch_size,)
-
-        ratios = torch.exp(log_probs - old_log_probs)  # Shape: (batch_size,)
+        new_log_probs = dist.log_prob(batch_actions)
+        ratios = torch.exp(new_log_probs - old_log_probs)  # Shape: (batch_size,)
         surr1 = ratios * advantages  # Shape: (batch_size,)
         surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size,)
         actor_loss = -torch.min(surr1, surr2).mean()  # Shape: scalar
 
-        critic_loss = F.huber_loss(values, returns, "mean", 0.1)  # Shape: scalar
-
-        entropy_loss = (log_probs).mean()  # Shape: scalar log_probs.exp()*
-        print("loss:",entropy_loss)
-        return self.action_coef*actor_loss + self.value_coef * critic_loss + self.entropy_coef * entropy_loss  # Shape: scalar
+        critic_loss = F.huber_loss(values, returns, "mean", 0.5)  # Shape: scalar
+        entropy:Tensor = dist.entropy().mean() #scalar
+        
+        print("loss:",f"{entropy.item():.4f}",end="\r")
+        return self.action_coef*actor_loss + self.value_coef * critic_loss - self.entropy_coef * entropy  # Shape: scalar
 
     def compute_gae(self, rewards, values, dones, next_value):
         # rewards shape: (sequence_length,)
@@ -455,9 +457,9 @@ class PPOTrainer:
                 batch_advantages = batch_advantages.to(self.model.bert.device)  # Shape: (batch_size,)
 
                 logits, state_values = self.model.forward(inputs = batch_token)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
-                log_probs = Categorical(logits=logits.float()).log_prob(batch_actions)  # Shape: (batch_size,)
+                dist = Categorical(logits=logits.float())  # Shape: (batch_size,)
 
-                loss = self.ppo_loss(batch_old_log_probs, log_probs, batch_advantages, batch_returns, state_values)  # Shape: scalar
+                loss = self.ppo_loss(batch_old_log_probs, dist, batch_actions, batch_advantages, batch_returns, state_values)  # Shape: scalar
 
                 self.optimizer.zero_grad()
                 loss.backward()
