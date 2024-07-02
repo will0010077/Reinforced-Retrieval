@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] ="1"
+# os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 
 import sys
@@ -27,8 +27,6 @@ import config
 
 
 token = "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"
-bert_dir = "huggingface/bert"
-LM_dir = "/usr/model/llama2-7b/"
 def doc_templete(doc:list[str]):
     return  '\n\n'.join(doc)
 def templete(doc_list:list[str], query:str, answer:str)->tuple[str]:
@@ -66,7 +64,7 @@ if __name__=="__main__":
     cluster.load('05_29_14_30')
 
     print('Loading LLM')
-    LM = LLaMa_reader(LM_dir, device, token = token, from_pretrained=True)
+    LM = LLaMa_reader(config.LM_dir, device, token = token, from_pretrained=True)
     dtype = LM.dtype
     num_dims = LM.model.config.hidden_size
     # print(LM.model.config)
