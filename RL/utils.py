@@ -390,7 +390,7 @@ class PPOTrainer:
         
         self.action_coef=1
         self.value_coef=2
-        self.entropy_coef=1
+        self.entropy_coef=0.001
 
     def ppo_loss(self, old_log_probs, log_probs, advantages, returns, values):
         # old_log_probs shape: (batch_size,)
@@ -406,7 +406,8 @@ class PPOTrainer:
 
         critic_loss = F.huber_loss(values, returns, "mean", 0.1)  # Shape: scalar
 
-        entropy_loss = (log_probs).mean()  # Shape: scalar
+        entropy_loss = (log_probs).mean()  # Shape: scalar log_probs.exp()*
+        print("loss:",entropy_loss)
         return self.action_coef*actor_loss + self.value_coef * critic_loss + self.entropy_coef * entropy_loss  # Shape: scalar
 
     def compute_gae(self, rewards, values, dones, next_value):

@@ -1,5 +1,5 @@
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] ="1"
+os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 
 import sys
@@ -166,7 +166,7 @@ if __name__=="__main__":
             action_logits, state_value = action_logits.cpu(), state_value.cpu()
             action_prob = torch.log_softmax(action_logits/1, dim=-1)  # Shape: (1, action_space_size)
             dist = Categorical(logits = action_prob)
-            if torch.rand([1])<0.05 or env.current_index<500:
+            if torch.rand([1])<0.05 :
                 action = torch.randint(env.action_space_size, [1])
             else:
                 action = dist.sample()  # Shape: (1,)
