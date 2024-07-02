@@ -17,7 +17,7 @@ from DatasetLoader.dataset import NQADataset
 from metric.reward import BLEU_score, Bert_score
 
 from tqdm import tqdm
-import yaml
+import config
 import peft
 import os
 
@@ -25,8 +25,6 @@ from PrefixPretrain import collate
 token = "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"
 model_dir = "meta-llama/Llama-2-7b-chat-hf"
 
-with open('config.yaml', 'r') as yamlfile:
-    config = yaml.safe_load(yamlfile)
 if __name__=="__main__":
     device = 1
     print('Loading LLM')
@@ -35,10 +33,10 @@ if __name__=="__main__":
     num_dims = LM.model.config.hidden_size
     # print(LM.model.config)
     print(f'Initialize KnowEnc with {dtype}...')
-    Encoder=KnowEncoder(dims = num_dims, **config['Enc_config'], dtype=dtype)
+    Encoder=KnowEncoder(dims = num_dims, **config.enc_config, dtype=dtype)
 
     print(f'Initialize EncTunedLM...')
-    peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=config['Enc_config']['num_layers'], adapter_len=1)}
+    peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=config.enc_config.num_layers, adapter_len=1)}
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
     LM.to(device)
     LM.eval()
@@ -59,8 +57,9 @@ if __name__=="__main__":
         a_tokens = a_tokens.to(device)
         
         with torch.no_grad():
-            p_generation = LM.pseudo_generate(unlabel_str, a_str, a_tokens)
-            print("Pseudo generation: ", p_generation)
+            for _ in range(5):
+                p_generation = LM.pseudo_generate(unlabel_str, a_str, a_tokens,temperture=1)
+                print("Pseudo generation: ", p_generation)
                 
 
             message = unlabel_str #+" "+" ".join(a_str[j].split()[:5])

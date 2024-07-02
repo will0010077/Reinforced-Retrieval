@@ -145,7 +145,7 @@ if __name__=="__main__":
     
     env = LLMEnv(dataset, LM, retriever, 3)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
-    agent.bert.load_state_dict(torch.load("./save/Agent_06_30.pt"),strict=False)
+    # agent.bert.load_state_dict(torch.load("./save/Agent_06_30.pt"),strict=False)
     agent.to(device)
     
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
@@ -160,7 +160,6 @@ if __name__=="__main__":
     reward_file = open("reward_number.txt", "w")
     for episode in range(total):
         state = env.reset()  # Shape: string
-        print(env.y)
         done = False
         reward_list = []
         while not done:
@@ -178,7 +177,7 @@ if __name__=="__main__":
             #     action = torch.tensor(env.steps%3)
             print(action.item(), end='', flush=True)
             next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
-            if reward!=reward: # check nan, don't know why
+            if reward!=reward: # check nan, reach max_len of LLM, the output is empty
                 print("NAN!!!!")
                 break
             memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))

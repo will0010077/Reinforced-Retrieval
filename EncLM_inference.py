@@ -71,7 +71,7 @@ if __name__=="__main__":
             message = [unlabel_str[j] for j in range(len(unlabel_str))]
             output_pre = LM.generate(message, Doc_tokens=a_tokens, max_new_tokens=256)
             message = [a_str[j]+ unlabel_str[j] for j in range(len(unlabel_str))]
-            output_ori = LM.generate(message, Doc_tokens=a_tokens, max_new_tokens=256)
+            output_ori = LM.generate(message, Doc_tokens=None, max_new_tokens=256)
 
         # output_ori = [ output_ori[j][len(q_str[j]):] for j in range(len(q_str))]
         # output_pre = [ output_pre[j][len(q_str[j]):] for j in range(len(q_str))]

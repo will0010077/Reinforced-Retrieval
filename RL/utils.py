@@ -294,7 +294,7 @@ class LLMEnv:
         messages, answer = self.collate.templete(self.x, self.cat_response(self.response_cache))
         d_t = tensor_retuen_type(input_ids = self.d_t, attention_mask = torch.ones_like(self.d_t)).to(self.LM.device)
         # print("What is feeded:",messages+" "+answer, self.y[self.n])
-        response, log_prob = self.LM.pseudo_generate(messages+" "+answer, self.y[self.n], Doc_tokens = d_t, return_prob = True, decode = False)
+        response, log_prob = self.LM.pseudo_generate(messages+" "+answer, self.y[self.n], Doc_tokens = d_t, temperture = 0.5, return_prob = True, decode = False)
         
         return response, log_prob
 
@@ -387,6 +387,10 @@ class PPOTrainer:
         self.update_epochs = update_epochs
         self.batch_size = batch_size
         self.grad_step = grad_step
+        
+        self.action_coef=1
+        self.value_coef=2
+        self.entropy_coef=0.5
 
     def ppo_loss(self, old_log_probs, log_probs, advantages, returns, values):
         # old_log_probs shape: (batch_size,)
@@ -402,8 +406,8 @@ class PPOTrainer:
 
         critic_loss = F.huber_loss(values, returns, "mean", 0.1)  # Shape: scalar
 
-        entropy_loss = -(log_probs.exp()*log_probs).mean()  # Shape: scalar
-        return actor_loss + 2. * critic_loss - 0.5 * entropy_loss  # Shape: scalar
+        entropy_loss = (log_probs).mean()  # Shape: scalar
+        return self.action_coef*actor_loss + self.value_coef * critic_loss + self.entropy_coef * entropy_loss  # Shape: scalar
 
     def compute_gae(self, rewards, values, dones, next_value):
         # rewards shape: (sequence_length,)
