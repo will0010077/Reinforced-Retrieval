@@ -149,7 +149,7 @@ if __name__=="__main__":
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr}], betas = [0.9, 0.99], eps=1e-4)
-    trainer = PPOTrainer(agent, Agent_optim, lambd = 0.95, update_epochs=4, batch_size = 32, grad_step = 4)
+    trainer = PPOTrainer(agent, Agent_optim, lambd = 0.95, update_epochs=4, batch_size = 64, grad_step = 2)
     # Training loop
     total = 100000
     scheduler = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
@@ -166,7 +166,7 @@ if __name__=="__main__":
             action_logits, state_value = action_logits.cpu(), state_value.cpu()
             action_prob = torch.log_softmax(action_logits/1, dim=-1)  # Shape: (1, action_space_size)
             dist = Categorical(logits = action_prob)
-            if torch.rand([1])<0.05:
+            if torch.rand([1])<0.05 or env.current_index<500:
                 action = torch.randint(env.action_space_size, [1])
             else:
                 action = dist.sample()  # Shape: (1,)
