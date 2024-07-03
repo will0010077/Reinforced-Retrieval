@@ -1,5 +1,5 @@
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] ="1"
+os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 
 import sys
@@ -149,7 +149,7 @@ if __name__=="__main__":
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr}], betas = [0.9, 0.99], eps=1e-4)
-    trainer = PPOTrainer(agent, Agent_optim, lambd = 0.97, update_epochs=4, batch_size = 64, grad_step = 2)
+    trainer = PPOTrainer(agent, Agent_optim, lambd = 0.97, update_epochs=2, batch_size = 64, grad_step = 2)
     # Training loop
     total = 100000
     scheduler = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
@@ -177,23 +177,23 @@ if __name__=="__main__":
             next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             if reward!=reward: # check nan, reach max_len of LLM, the output is empty
                 print("NAN!!!!")
+                env.revise_reward.pop()
+                env.steps -= 1
                 break
-            memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
+            memory.append([state, action, dist.log_prob(action), reward, done, state_value])  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
             reward_list.append(reward)
             state = next_state
-        print("\n",env.revise_reward)
-        exit()
         # modify memory with revise reward that consider future
         for i in reversed(range(env.steps)):
-            memory[-i-1][3] = env.revise_reward[-i]
+            memory[-i-1][3] = env.revise_reward[-i-1]
         # print("\r"," "*80,"\r", end='\n')
         # print(env.cat_response(env.response_cache))
-        ma_reward = 0.95*ma_reward + 0.05*sum(reward_list)
-        reward_file.write(f"{ma_reward:.5f}\n")
+        ma_reward = 0.95*ma_reward + 0.05*sum(env.revise_reward)
+        reward_file.write(f"{sum(env.revise_reward):.5f}\n")
         print("\nreward: ",ma_reward, end="\r")
-        if len(memory)>768:
+        if len(memory)>(1024+512):
             reward_file.flush()
-            memory = memory[-512:]
+            memory = memory[-1024:]
             print()
             trainer.update(memory)
         scheduler.step()

@@ -252,7 +252,6 @@ class LLMEnv:
             self.done=True
         reward = reward + self.compute_reward()
         next_state = self.get_state()
-        
         self.steps += 1
         self.last_action=self.action
         return next_state, reward, self.done, {}
@@ -280,6 +279,8 @@ class LLMEnv:
                     if self.revise_reward[i]>0:
                         self.revise_reward[i]=0
                         break
+            else:
+                reward+=-0.05
         reward = float(reward)
         self.revise_reward.append(reward)
         return reward
@@ -380,7 +381,6 @@ class BertAgentCritic(nn.Module):
         super(BertAgentCritic, self).__init__()
         self.bert = RobertaModel.from_pretrained(config.roberta_dir, torch_dtype = torch.bfloat16).to(torch.bfloat16)
         self.tokenizer = RobertaTokenizer.from_pretrained(config.roberta_dir)
-        self.tokenizer.model_max_length = 1024
         self.action_head = nn.Linear(self.bert.config.hidden_size, action_space_size)
         self.value_head = nn.Linear(self.bert.config.hidden_size, 1)
         self.action_space_size = action_space_size
@@ -427,7 +427,7 @@ class PPOTrainer:
         critic_loss = F.huber_loss(values, returns, "mean", 0.5)  # Shape: scalar
         entropy:Tensor = dist.entropy().mean() #scalar
         
-        print("loss:",f"{entropy.item():.4f}",end="\r")
+        print("Entropy:",f"{entropy.item():.4f}",end="\r")
         return self.action_coef*actor_loss + self.value_coef * critic_loss - self.entropy_coef * entropy  # Shape: scalar
 
     def compute_gae(self, rewards, values, dones, next_value):
