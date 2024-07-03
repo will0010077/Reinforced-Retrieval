@@ -15,7 +15,7 @@ from metric.reward import BLEU_score, Bert_score
 import random
 import config
 import torch.optim as optim
-from transformers import BertModel, BertConfig, BertTokenizer
+from transformers import BertModel, BertConfig, BertTokenizer, RobertaModel, RobertaTokenizer
 from torch.distributions import Categorical
 from config import agent_size_config
 
@@ -181,10 +181,10 @@ class Transformer_Agent(nn.Module):
         return pi_loss, v_loss, reg_loss, flops_loss   
 
 class LLMEnv:
-    def __init__(self, dataset, LM:EncTunedLM, ret:doc_retriever, action_space_size, history_len = 8):
+    def __init__(self, dataset, LM:EncTunedLM, ret:doc_retriever, action_space_size, history_len = 6):
         self.dataset = dataset  # List of tuples (x, y)
         self.action_space_size = action_space_size
-        self.history_len = 8
+        self.history_len = history_len
         self.LM = LM
         self.eos_id = self.LM.tokenizer.eos_token_id
         self.ret = ret
@@ -201,7 +201,8 @@ class LLMEnv:
         self.d_t, zt = self.ret.retrieve(self.x, k=1, num_search=4)
         self.d_t = self.d_t.squeeze(1)
         self.basic_reward = Bert_score([self.get_basic_response(self.x, " ".join(self.y))[0]], [" ".join(self.y)])[0]
-
+        self.halulu = []
+        self.revise_reward = []
         self.hat_y_t = None
         self.response_cache = [self.hat_y_t]
         self.n = -1  # Initialize n to -1
@@ -212,7 +213,7 @@ class LLMEnv:
         return self.get_state()
 
     def get_state(self)->str:
-        state = self.collate.state_templete(self.x, self.cat_response(self.response_cache[-self.history_len:]), self.d_t, self.action_history)
+        state = self.collate.state_templete(self.x, self.cat_response(self.response_cache[-self.history_len:]), self.d_t[...,::2], self.action_history)
         return state
 
     def step(self, action):
@@ -247,36 +248,41 @@ class LLMEnv:
         #     self.done=True
         if len(self.action_history)>self.history_len:
             self.action_history.pop(0)
-        self.steps += 1
         if self.steps>3*len(self.y)+5:
             self.done=True
         reward = reward + self.compute_reward()
         next_state = self.get_state()
         
+        self.steps += 1
         self.last_action=self.action
         return next_state, reward, self.done, {}
 
     def compute_reward(self):
         # Implement reward calculation logic
         reward=0
-        if self.action==3 or self.done:
+        if self.done:
             if self.n>-1:
                 reward += 10*(Bert_score([self.cat_response(self.response_cache)], [" ".join(self.y)])[0] - self.basic_reward)
-                reward+= 0.1*((self.n+1)/len(self.y))**2
-                
+                reward += 0.1*((self.n+1)/len(self.y))**2
+                reward += sum(self.halulu)
         # elif self.action == 0:
         #     if self.last_action!=0:
         #         reward += Bert_score([self.collate.datatokenizer.decode(self.d_t[0])], [" ".join(self.y)])[0]/len(self.y)
-        # elif self.action==1:
-        #     reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
-        #     reward += 0.5*self.log_prob[0].exp().mean()/len(self.y)
-        #     reward *= 1.1
-        # elif self.action==2:
-        #     if self.n>-1:
-        #         reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
-        #         reward += 0.5*self.log_prob[0].exp().mean()/len(self.y)
-        
-        return float(reward)
+        if self.action==1:
+            reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
+            self.halulu.append(0.5*self.log_prob[0].exp().mean()/len(self.y))
+        elif self.action==2:
+            if self.n>-1:
+                reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
+                self.halulu.pop(-1)
+                self.halulu.append(0.5*self.log_prob[0].exp().mean()/len(self.y))
+                for i in reversed(range(self.steps)):
+                    if self.revise_reward[i]>0:
+                        self.revise_reward[i]=0
+                        break
+        reward = float(reward)
+        self.revise_reward.append(reward)
+        return reward
     
     def construct_query(self):
         self.x, self.d_t, self.response_cache
@@ -372,8 +378,8 @@ class LLMEnv_test(LLMEnv):
 class BertAgentCritic(nn.Module):
     def __init__(self, model_config, action_space_size):
         super(BertAgentCritic, self).__init__()
-        self.bert = BertModel.from_pretrained(config.bert_dir, torch_dtype = torch.bfloat16).to(torch.bfloat16)
-        self.tokenizer = BertTokenizer.from_pretrained(config.bert_dir)
+        self.bert = RobertaModel.from_pretrained(config.roberta_dir, torch_dtype = torch.bfloat16).to(torch.bfloat16)
+        self.tokenizer = RobertaTokenizer.from_pretrained(config.roberta_dir)
         self.tokenizer.model_max_length = 1024
         self.action_head = nn.Linear(self.bert.config.hidden_size, action_space_size)
         self.value_head = nn.Linear(self.bert.config.hidden_size, 1)

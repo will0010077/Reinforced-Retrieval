@@ -181,6 +181,11 @@ if __name__=="__main__":
             memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
             reward_list.append(reward)
             state = next_state
+        print("\n",env.revise_reward)
+        exit()
+        # modify memory with revise reward that consider future
+        for i in reversed(range(env.steps)):
+            memory[-i-1][3] = env.revise_reward[-i]
         # print("\r"," "*80,"\r", end='\n')
         # print(env.cat_response(env.response_cache))
         ma_reward = 0.95*ma_reward + 0.05*sum(reward_list)
