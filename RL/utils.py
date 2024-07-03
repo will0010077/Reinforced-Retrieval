@@ -13,7 +13,7 @@ from LM.llama_reader import EncTunedLM
 from DocBuilder.Retriever_k_means import doc_retriever
 from metric.reward import BLEU_score, Bert_score
 import random
-
+import config
 import torch.optim as optim
 from transformers import BertModel, BertConfig, BertTokenizer
 from torch.distributions import Categorical
@@ -198,9 +198,10 @@ class LLMEnv:
         self.y:list[str] = self.y.split(' ')
         chunk_size = 10
         self.y = [' '.join(self.y[i:i+chunk_size]) for i in range(0,len(self.y), chunk_size)]
-        
         self.d_t, zt = self.ret.retrieve(self.x, k=1, num_search=4)
         self.d_t = self.d_t.squeeze(1)
+        self.basic_reward = Bert_score([self.get_basic_response(self.x, " ".join(self.y))[0]], [" ".join(self.y)])[0]
+
         self.hat_y_t = None
         self.response_cache = [self.hat_y_t]
         self.n = -1  # Initialize n to -1
@@ -260,20 +261,20 @@ class LLMEnv:
         reward=0
         if self.action==3 or self.done:
             if self.n>-1:
-                reward += 2*Bert_score([self.cat_response(self.response_cache)], [" ".join(self.y)])[0]
-                reward+= ((self.n+1)/len(self.y))**2
+                reward += 10*(Bert_score([self.cat_response(self.response_cache)], [" ".join(self.y)])[0] - self.basic_reward)
+                reward+= 0.1*((self.n+1)/len(self.y))**2
                 
-        elif self.action == 0:
-            if self.last_action!=0:
-                reward += Bert_score([self.collate.datatokenizer.decode(self.d_t[0])], [" ".join(self.y)])[0]/len(self.y)
-        elif self.action==1:
-            reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
-            reward += 0.5*self.log_prob[0].exp().mean()/len(self.y)
-            reward *= 1.1
-        elif self.action==2:
-            if self.n>-1:
-                reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
-                reward += 0.5*self.log_prob[0].exp().mean()/len(self.y)
+        # elif self.action == 0:
+        #     if self.last_action!=0:
+        #         reward += Bert_score([self.collate.datatokenizer.decode(self.d_t[0])], [" ".join(self.y)])[0]/len(self.y)
+        # elif self.action==1:
+        #     reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
+        #     reward += 0.5*self.log_prob[0].exp().mean()/len(self.y)
+        #     reward *= 1.1
+        # elif self.action==2:
+        #     if self.n>-1:
+        #         reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
+        #         reward += 0.5*self.log_prob[0].exp().mean()/len(self.y)
         
         return float(reward)
     
@@ -294,11 +295,22 @@ class LLMEnv:
         # Implement response generation logic
         # messages, answer = self.collate.templete(self.x, ' '.join(self.response_cache))
         messages, answer = self.collate.templete(self.x, self.cat_response(self.response_cache))
-        d_t = tensor_retuen_type(input_ids = self.d_t, attention_mask = torch.ones_like(self.d_t)).to(self.LM.device)
+        if self.d_t!=None:
+            d_t = tensor_retuen_type(input_ids = self.d_t, attention_mask = torch.ones_like(self.d_t)).to(self.LM.device)
         # print("What is feeded:",messages+" "+answer, self.y[self.n])
         response, log_prob = self.LM.pseudo_generate(messages+" "+answer, self.y[self.n], Doc_tokens = d_t, temperture = 0.5, return_prob = True, decode = False)
         
         return response, log_prob
+    def get_basic_response(self,x, y):
+        # Implement response generation logic
+        # messages, answer = self.collate.templete(self.x, ' '.join(self.response_cache))
+        messages, answer = self.collate.templete(x, "")
+        if self.d_t!=None:
+            d_t = tensor_retuen_type(input_ids = self.d_t, attention_mask = torch.ones_like(self.d_t)).to(self.LM.device)
+        # print("What is feeded:",messages+" "+answer, self.y[self.n])
+        response = self.LM.pseudo_generate(messages+" "+answer, y, Doc_tokens = d_t, temperture = 0.5, return_prob = False, decode = True)
+        
+        return response
 
 class LLMEnv_test(LLMEnv):
     
@@ -360,8 +372,8 @@ class LLMEnv_test(LLMEnv):
 class BertAgentCritic(nn.Module):
     def __init__(self, model_config, action_space_size):
         super(BertAgentCritic, self).__init__()
-        self.bert = BertModel(BertConfig(**model_config))
-        self.tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+        self.bert = BertModel.from_pretrained(config.bert_dir, torch_dtype = torch.bfloat16).to(torch.bfloat16)
+        self.tokenizer = BertTokenizer.from_pretrained(config.bert_dir)
         self.tokenizer.model_max_length = 1024
         self.action_head = nn.Linear(self.bert.config.hidden_size, action_space_size)
         self.value_head = nn.Linear(self.bert.config.hidden_size, 1)
@@ -392,7 +404,7 @@ class PPOTrainer:
         
         self.action_coef=1
         self.value_coef=2
-        self.entropy_coef=2**-10
+        self.entropy_coef=2**-8
 
     def ppo_loss(self, old_log_probs, dist:Categorical, batch_actions, advantages, returns, values):
         # old_log_probs shape: (batch_size,)

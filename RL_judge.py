@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] ="1"
+# os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 
 import sys
@@ -154,7 +154,7 @@ if __name__=="__main__":
     total = 100000
     scheduler = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
     memory = []
-    ma_reward=1.5
+    ma_reward=0
     reward_file = open("reward_number.txt", "w")
     for episode in range(total):
         state = env.reset()  # Shape: string
