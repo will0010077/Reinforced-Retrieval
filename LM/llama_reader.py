@@ -217,7 +217,7 @@ class LLaMa_reader(torch.nn.Module):
         tokens = tokens.to(self.model.device)
         
         lm_logits, loss = self.forward(tokens, return_logits = True, **kwargs)
-        dist = Categorical(logits=torch.log_softmax(lm_logits/temperture, dim=-1))
+        dist = Categorical(logits=lm_logits/temperture)
         
         top_token = dist.sample()
         cut_token = [top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1] for i in range(len(messages))]

@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] ="1"
+# os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 
 import sys
@@ -143,13 +143,13 @@ if __name__=="__main__":
     
     env = LLMEnv(dataset, LM, retriever, 3)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
-    # agent.bert.load_state_dict(torch.load("./save/Agent_06_30.pt"),strict=False)
+    # agent.load_state_dict(torch.load("./save/Agent.pt"),strict=False)
     agent.to(device)
     
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
-                               {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr},
-                               {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr}], betas = [0.9, 0.99], eps=1e-4)
-    trainer = PPOTrainer(agent, Agent_optim, lambd = 0.97, update_epochs=2, batch_size = 64, grad_step = 2)
+                               {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr*3},
+                               {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas = [0.8, 0.98], eps=1e-4)
+    trainer = PPOTrainer(agent, Agent_optim, gamma = 0.99,  lambd = 0.96, update_epochs=4, batch_size = 64, grad_step = 1)
     # Training loop
     total = 100000
     scheduler = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
@@ -164,8 +164,7 @@ if __name__=="__main__":
             with torch.no_grad():
                 action_logits, state_value = agent([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
             action_logits, state_value = action_logits.cpu(), state_value.cpu()
-            action_prob = torch.log_softmax(action_logits/1, dim=-1)  # Shape: (1, action_space_size)
-            dist = Categorical(logits = action_prob)
+            dist = Categorical(logits = action_logits)
             if torch.rand([1])<0.05 :
                 action = torch.randint(env.action_space_size, [1])
             else:
@@ -191,11 +190,11 @@ if __name__=="__main__":
         ma_reward = 0.95*ma_reward + 0.05*sum(env.revise_reward)
         reward_file.write(f"{sum(env.revise_reward):.5f}\n")
         print("\nreward: ",ma_reward, end="\r")
-        if len(memory)>(1024+512):
+        if len(memory)>(512):
             reward_file.flush()
-            memory = memory[-1024:]
             print()
             trainer.update(memory)
+            memory = []
         scheduler.step()
         if (episode+1)%2000==0:
             #save Agent weight

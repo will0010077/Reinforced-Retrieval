@@ -18,7 +18,7 @@ import torch.optim as optim
 from transformers import BertModel, BertConfig, BertTokenizer, RobertaModel, RobertaTokenizer
 from torch.distributions import Categorical
 from config import agent_size_config
-
+from tqdm import tqdm
 class transition(tensor_retuen_type):
     def __init__(self, *args, **kwargs):
         '''
@@ -271,6 +271,7 @@ class LLMEnv:
             reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
             self.halulu.append(0.5*self.log_prob[0].exp().mean()/len(self.y))
         elif self.action==2:
+            reward -= 0.01
             if self.n>-1:
                 reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
                 self.halulu.pop(-1)
@@ -409,8 +410,8 @@ class PPOTrainer:
         self.grad_step = grad_step
         
         self.action_coef=1
-        self.value_coef=2
-        self.entropy_coef=2**-8
+        self.value_coef=2**-1
+        self.entropy_coef=2**-7
 
     def ppo_loss(self, old_log_probs, dist:Categorical, batch_actions, advantages, returns, values):
         # old_log_probs shape: (batch_size,)
@@ -427,8 +428,7 @@ class PPOTrainer:
         critic_loss = F.huber_loss(values, returns, "mean", 0.5)  # Shape: scalar
         entropy:Tensor = dist.entropy().mean() #scalar
         
-        print("Entropy:",f"{entropy.item():.4f}",end="\r")
-        return self.action_coef*actor_loss + self.value_coef * critic_loss - self.entropy_coef * entropy  # Shape: scalar
+        return actor_loss, critic_loss, - entropy  # Shape: scalar
 
     def compute_gae(self, rewards, values, dones, next_value):
         # rewards shape: (sequence_length,)
@@ -462,9 +462,9 @@ class PPOTrainer:
         returns = torch.tensor(returns, dtype=torch.float32)  # Shape: (memory_size,)
         values = torch.tensor(values, dtype=torch.float32)  # Shape: (memory_size,)
         advantages = returns - values  # Shape: (memory_size,)
-        
-        loader = DataLoader([*zip(old_states, old_actions, old_log_probs, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True)
+        loader = DataLoader([*zip(old_states, old_actions, old_log_probs, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True, drop_last=True)
         step = 0
+        bar = tqdm(total=self.update_epochs*len(loader), ncols=0)
         for _ in range(self.update_epochs):
             for batch_token, batch_actions, batch_old_log_probs, batch_returns, batch_advantages in loader:
                 step+=1
@@ -475,11 +475,13 @@ class PPOTrainer:
                 batch_advantages = batch_advantages.to(self.model.bert.device)  # Shape: (batch_size,)
 
                 logits, state_values = self.model.forward(inputs = batch_token)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
-                dist = Categorical(logits=logits.float())  # Shape: (batch_size,)
+                dist = Categorical(logits=logits)  # Shape: (batch_size,)
 
-                loss = self.ppo_loss(batch_old_log_probs, dist, batch_actions, batch_advantages, batch_returns, state_values)  # Shape: scalar
-
+                actor_loss, value_loss, entropy_loss = self.ppo_loss(batch_old_log_probs, dist, batch_actions, batch_advantages, batch_returns, state_values)  # Shape: scalar
+                bar.set_postfix_str(f"ac: {actor_loss:.3f}, value: {value_loss:.3f}, entropy: {-entropy_loss:.3f}")
+                bar.update()
                 self.optimizer.zero_grad()
+                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*entropy_loss
                 loss.backward()
                 if step%self.grad_step==0:
                     self.optimizer.step()

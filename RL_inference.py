@@ -80,7 +80,7 @@ if __name__=="__main__":
     data_path='data/cleandata.jsonl'
     dataset=NQADataset(data_path=data_path)
     
-    env = LLMEnv_test(dataset, LM, retriever, 4)
+    env = LLMEnv_test(dataset, LM, retriever, 3)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
     agent.to(device)
     agent.load_state_dict(torch.load("./save/Agent.pt", map_location="cpu"))
@@ -97,12 +97,11 @@ if __name__=="__main__":
             with torch.no_grad():
                 action_logits, state_value = agent([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
             action_logits, state_value = action_logits.cpu(), state_value.cpu()
-            action_prob = torch.softmax(action_logits/1, dim=-1)  # Shape: (1, action_space_size)
-            action_prob[0, 1]+=0.2
-            action_prob[0, 2]-=0.2
-            action_prob[0, 3]=0.
-            action = action_prob.argmax(dim=-1)  # Shape: (1,)
-            
+            # action_prob[0, 1]+=0.2
+            # action_prob[0, 2]-=0.2
+            action_prob = torch.log_softmax(action_logits/0.5, dim=-1)  # Shape: (1, action_space_size)
+            dist = Categorical(logits = action_prob)
+            action = dist.sample()  # Shape: (1,)
             print(action.item(), end=': ', flush=True)
             next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             if reward!=reward: # check nan, don't know why
