@@ -411,7 +411,7 @@ class PPOTrainer:
         
         self.action_coef=1
         self.value_coef=2**-1
-        self.entropy_coef=2**-7
+        self.entropy_coef=2**-8
 
     def ppo_loss(self, old_log_probs, dist:Categorical, batch_actions, advantages, returns, values):
         # old_log_probs shape: (batch_size,)

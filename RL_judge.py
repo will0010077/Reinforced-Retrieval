@@ -143,19 +143,21 @@ if __name__=="__main__":
     
     env = LLMEnv(dataset, LM, retriever, 3)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
-    # agent.load_state_dict(torch.load("./save/Agent.pt"),strict=False)
+    agent.load_state_dict(torch.load("./save/Agent.pt"))
     agent.to(device)
     
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr*3},
                                {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas = [0.8, 0.98], eps=1e-4)
-    trainer = PPOTrainer(agent, Agent_optim, gamma = 0.99,  lambd = 0.96, update_epochs=4, batch_size = 64, grad_step = 1)
+    trainer = PPOTrainer(agent, Agent_optim, gamma = 0.99, clip_epsilon=0.1, lambd = 0.96, update_epochs=4, batch_size = 64, grad_step = 1)
     # Training loop
     total = 100000
-    scheduler = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
+    reduce = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
+    warmup = optim.lr_scheduler.LinearLR(Agent_optim, 1e-5, 1, total_iters=int(total*0.005))
+    scheduler = optim.lr_scheduler.SequentialLR(Agent_optim, [warmup, reduce], milestones=[warmup.total_iters])
     memory = []
     ma_reward=0
-    reward_file = open("reward_number.txt", "w")
+    reward_file = open("reward_number.txt", "a")
     for episode in range(total):
         state = env.reset()  # Shape: string
         done = False
