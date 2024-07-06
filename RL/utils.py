@@ -179,6 +179,181 @@ class Transformer_Agent(nn.Module):
         # FLOPS loss
         flops_loss = torch.abs(outputs).sum(-1)**2
         return pi_loss, v_loss, reg_loss, flops_loss   
+    
+    
+class LLMEnv_batch_version:
+    def __init__(self, dataset, LM: EncTunedLM, ret: doc_retriever, action_space_size, history_len=6):
+        self.dataset = dataset  # List of tuples (x, y)
+        self.action_space_size = action_space_size
+        self.history_len = history_len
+        self.LM = LM
+        self.eos_id = self.LM.tokenizer.eos_token_id
+        self.ret = ret
+        self.current_index = 0
+        self.collate = collate()
+        self.batch_size = len(dataset)  # Set batch size as length of dataset
+        self.x = [None] * self.batch_size
+        self.y = [None] * self.batch_size
+        self.d_t = [None] * self.batch_size
+        self.basic_reward = [None] * self.batch_size
+        self.halulu = [None] * self.batch_size
+        self.revise_reward = [None] * self.batch_size
+        self.hat_y_t = [None] * self.batch_size
+        self.response_cache = [None] * self.batch_size
+        self.n = [None] * self.batch_size
+        self.done = [None] * self.batch_size
+        self.steps = [None] * self.batch_size
+        self.last_action = [None] * self.batch_size
+        self.action_history = [None] * self.batch_size
+
+    def reset(self, idx=None):
+        if idx is None:
+            for i in range(self.batch_size):
+                self._reset_idx(i)
+            return [self.get_state(i) for i in range(self.batch_size)]
+        else:
+            self._reset_idx(idx)
+            return self.get_state(idx)
+
+    def _reset_idx(self, idx):
+        self.current_data = self.dataset[random.randrange(len(self.dataset))]
+        self.x[idx], self.y[idx] = self.current_data
+        self.y[idx] = self.y[idx].split(' ')
+        chunk_size = 10
+        self.y[idx] = [' '.join(self.y[idx][i:i + chunk_size]) for i in range(0, len(self.y[idx]), chunk_size)]
+        self.d_t[idx], zt = self.ret.retrieve(self.x[idx], k=1, num_search=4)
+        self.d_t[idx] = self.d_t[idx].squeeze(1)
+        self.basic_reward[idx] = Bert_score([self.get_basic_response(self.x[idx], " ".join(self.y[idx]))[0]], [" ".join(self.y[idx])])[0]
+        self.halulu[idx] = []
+        self.revise_reward[idx] = []
+        self.hat_y_t[idx] = None
+        self.response_cache[idx] = [self.hat_y_t[idx]]
+        self.n[idx] = -1  # Initialize n to -1
+        self.done[idx] = False
+        self.steps[idx] = 0
+        self.last_action[idx] = -1
+        self.action_history[idx] = []
+
+    def get_state(self, idx) -> str:
+        state = self.collate.state_templete(
+            self.x[idx],
+            self.cat_response(self.response_cache[idx][-self.history_len:]),
+            self.d_t[idx][..., ::2],
+            self.action_history[idx]
+        )
+        return state
+
+    def step(self, actions):
+        rewards = [0] * self.batch_size
+        next_states = []
+        done_flags = []
+
+        retrieve_indices = []
+        proceed_indices = []
+        rewrite_indices = []
+
+        for i, action in enumerate(actions):
+            if not self.done[i]:
+                self.action_history[i].append(action)
+                if action == 0:  # Retrieve Document
+                    if self.last_action[i] != 0:
+                        retrieve_indices.append(i)
+                elif action == 1:  # Proceed Response
+                    if self.n[i] + 1 < len(self.y[i]):
+                        proceed_indices.append(i)
+                elif action == 2:  # Rewrite Current Response
+                    if self.n[i] > -1:
+                        rewrite_indices.append(i)
+                elif action == 3:  # Output Answer
+                    self.done[i] = True
+
+        # Process Retrieve Document actions
+        for i in retrieve_indices:
+            q_t = self.construct_query(i)
+            self.d_t[i], zt = self.ret.retrieve(q_t, k=1, num_search=4)
+            self.d_t[i] = self.d_t[i].squeeze(1)
+
+        # Process Proceed and Rewrite actions in a batch
+        batch_indices = proceed_indices + rewrite_indices
+        if batch_indices:
+            responses, log_probs = self.get_next_response(batch_indices)
+            for idx, i in enumerate(batch_indices):
+                self.hat_y_t[i] = responses[idx]
+                self.log_prob = log_probs[idx]
+                if i in proceed_indices:
+                    self.response_cache[i].append(self.hat_y_t[i][0])
+                    self.n[i] += 1
+                elif i in rewrite_indices:
+                    self.response_cache[i].pop()
+                    self.response_cache[i].append(self.hat_y_t[i][0])
+
+        for i in range(self.batch_size):
+            if not self.done[i]:
+                reward = self.compute_reward(i)
+                rewards[i] += reward
+                next_states.append(self.get_state(i))
+                done_flags.append(self.done[i])
+                self.steps[i] += 1
+                self.last_action[i] = actions[i]
+            else:
+                next_states.append(self.get_state(i))
+                done_flags.append(self.done[i])
+
+        return next_states, rewards, done_flags, {}
+
+    def compute_reward(self, idx):
+        reward = 0
+        if self.done[idx]:
+            if self.n[idx] > -1:
+                reward += 10 * (Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - self.basic_reward[idx])
+                reward += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
+                reward += sum(self.halulu[idx])
+        if self.last_action[idx] == 1:
+            reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
+            self.halulu[idx].append(0.5 * self.log_prob[0].exp().mean() / len(self.y[idx]))
+        elif self.last_action[idx] == 2:
+            reward -= 0.01
+            if self.n[idx] > -1:
+                reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
+                self.halulu[idx].pop(-1)
+                self.halulu[idx].append(0.5 * self.log_prob[0].exp().mean() / len(self.y[idx]))
+                for i in reversed(range(self.steps[idx])):
+                    if self.revise_reward[idx][i] > 0:
+                        self.revise_reward[idx][i] = 0
+                        break
+            else:
+                reward += -0.05
+        reward = float(reward)
+        self.revise_reward[idx].append(reward)
+        return reward
+
+    def construct_query(self, idx):
+        return self.x[idx] + self.cat_response(self.response_cache[idx][-self.history_len:])
+
+    def cat_response(self, cache: list[Tensor]) -> str:
+        if cache[0] is None:
+            cache = cache[1:]
+        if len(cache) == 0:
+            return ""
+        s = self.LM.tokenizer.decode(torch.cat(cache))
+        return s
+
+    def get_next_response(self, indices):
+        messages = [self.collate.templete(self.x[i], self.cat_response(self.response_cache[i]))[0] for i in indices]
+        answers = [self.y[i][self.n[i]] for i in indices]
+        d_t = torch.cat([self.d_t[i] for i in indices])
+        d_t = tensor_retuen_type(input_ids=d_t, attention_mask=torch.ones_like(d_t)).to(self.LM.device)
+
+        responses, log_probs = self.LM.pseudo_generate(messages, answers, Doc_tokens=d_t, temperture=0.5, return_prob=True, decode=False)
+        return responses, log_probs
+
+    def get_basic_response(self, x, y):
+        messages, answer = self.collate.templete(x, "")
+        d_t = tensor_retuen_type(input_ids=self.d_t[0], attention_mask=torch.ones_like(self.d_t[0])).to(self.LM.device)
+        response = self.LM.pseudo_generate(messages + " " + answer, y, Doc_tokens=d_t, temperture=0.5, return_prob=False, decode=True)
+        return response
+
+
 
 class LLMEnv:
     def __init__(self, dataset, LM:EncTunedLM, ret:doc_retriever, action_space_size, history_len = 6):
