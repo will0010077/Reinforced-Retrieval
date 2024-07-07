@@ -205,6 +205,7 @@ class LLMEnv_batch_version:
         self.done = [None] * self.batch_size
         self.steps = [None] * self.batch_size
         self.last_action = [None] * self.batch_size
+        self.last_proceed = [-1] * self.batch_size
         self.action_history = [None] * self.batch_size
 
     def reset(self, idx=None):
@@ -233,6 +234,7 @@ class LLMEnv_batch_version:
         self.done[idx] = False
         self.steps[idx] = 0
         self.last_action[idx] = -1
+        self.last_proceed[idx] = -1
         self.action_history[idx] = []
 
     def get_state(self, idx) -> str:
@@ -263,12 +265,14 @@ class LLMEnv_batch_version:
                 elif action == 1:  # Proceed Response
                     if self.n[i] + 1 < len(self.y[i]):
                         self.n[i] += 1
+                        self.last_proceed[i] = self.steps[i]
                         proceed_indices.append(i)
                     else:
                         self.done[i]=True
                         self.actions[i]==-1
                 elif action == 2:  # Rewrite Current Response
                     if self.n[i] > -1:
+                        self.response_cache[i].pop()
                         rewrite_indices.append(i)
 
         # Process Retrieve Document actions
@@ -287,14 +291,10 @@ class LLMEnv_batch_version:
             for idx, i in enumerate(batch_indices):
                 self.hat_y_t[i] = responses[idx]
                 self.log_prob[i] = log_probs[idx]
-                if i in proceed_indices:
-                    self.response_cache[i].append(self.hat_y_t[i])
-                elif i in rewrite_indices:
-                    self.response_cache[i].pop()
-                    self.response_cache[i].append(self.hat_y_t[i])
+                self.response_cache[i].append(self.hat_y_t[i])
 
         for i in range(self.batch_size):
-            if self.steps[i]>2*len(self.y[i])+4:
+            if self.steps[i]>3*len(self.y[i])+4:
                 self.done[i]=True
             reward = self.compute_reward(i)
             rewards[i] += reward
@@ -316,17 +316,16 @@ class LLMEnv_batch_version:
                 reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
                 self.halulu[idx].pop(-1)
                 self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
-                for i in reversed(range(self.steps[idx])):
-                    if self.revise_reward[idx][i] > 0:
-                        self.revise_reward[idx][i] = 0
-                        break
+                reward /=  self.steps[idx] - self.last_proceed[idx]+1
+                for i in range(self.last_proceed[idx], self.steps[idx]):
+                    self.revise_reward[idx][i] = float(reward)
             else:
                 reward += -0.05
         if self.done[idx]:
             if self.n[idx] > -1:
-                reward += 10 * (Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - self.basic_reward[idx])
+                reward += 2 * (Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - self.basic_reward[idx])
                 reward += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
-                reward += sum(self.halulu[idx])
+                reward += 0.1 * sum(self.halulu[idx])
         reward = float(reward)
         if reward!=reward:
             print("NAN!!")
@@ -593,7 +592,7 @@ class PPOTrainer:
         self.grad_step = grad_step
         
         self.action_coef=1
-        self.value_coef=2**1
+        self.value_coef=2**-1
         self.entropy_coef=2**-8
 
     def ppo_loss(self, old_log_probs, dist:Categorical, batch_actions, advantages, returns, values):
@@ -608,7 +607,7 @@ class PPOTrainer:
         surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size,)
         actor_loss = -torch.min(surr1, surr2).mean()  # Shape: scalar
 
-        critic_loss = F.huber_loss(values, returns, "mean", 0.5)  # Shape: scalar
+        critic_loss = F.huber_loss(values, returns, "mean", 1.0)  # Shape: scalar
         entropy:Tensor = dist.entropy().mean() #scalar
         
         return actor_loss, critic_loss, - entropy  # Shape: scalar

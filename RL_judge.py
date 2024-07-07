@@ -150,7 +150,7 @@ if __name__=="__main__":
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr*3},
                                {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas = [0.8, 0.99], eps=1e-4)
-    trainer = PPOTrainer(agent, Agent_optim, gamma = 0.99, clip_epsilon=0.2, lambd = 0.96, update_epochs=4, batch_size = 64, grad_step = 1)
+    trainer = PPOTrainer(agent, Agent_optim, gamma = 0.99, clip_epsilon=0.2, lambd = 0.95, update_epochs=4, batch_size = 64, grad_step = 1)
     # Training loop
     total = 100000
     reduce = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
@@ -180,7 +180,7 @@ if __name__=="__main__":
             
             # if episode%20==0:
             #     action = torch.tensor(env.steps%3)
-            print(action[0].item(), end='', flush=True)
+            # print("".join([str(a.item()) for a in action]), end='', flush=True)
             next_state, reward, done, _ = env.step(action)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             for i in range(env_bs):
                 trajectory[i].append([state[i], action[i], dist.log_prob(action)[i], reward[i], done[i], state_value[i]])  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
@@ -197,7 +197,7 @@ if __name__=="__main__":
         # print("\r"," "*80,"\r", end='\n')
         # print(env.cat_response(env.response_cache))
         # print("\nreward: ",ma_reward, end="\n")
-        if len(memory)>(512):
+        if len(memory)>(1024):
             reward_file.flush()
             trainer.update(memory)
             memory = []
