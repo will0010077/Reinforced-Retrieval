@@ -141,20 +141,20 @@ if __name__=="__main__":
     data_path='data/cleandata.jsonl'
     dataset=NQADataset(data_path=data_path)
     
-    env_bs = 8
+    env_bs = 64
     env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
-    agent.load_state_dict(torch.load("./save/Agent.pt"))
+    # agent.load_state_dict(torch.load("./save/Agent30000.pt"))
     agent.to(device)
     
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr*3},
-                               {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas = [0.8, 0.98], eps=1e-4)
-    trainer = PPOTrainer(agent, Agent_optim, gamma = 0.99, clip_epsilon=0.1, lambd = 0.96, update_epochs=4, batch_size = 64, grad_step = 1)
+                               {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas = [0.8, 0.99], eps=1e-4)
+    trainer = PPOTrainer(agent, Agent_optim, gamma = 0.99, clip_epsilon=0.2, lambd = 0.96, update_epochs=4, batch_size = 64, grad_step = 1)
     # Training loop
     total = 100000
     reduce = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
-    warmup = optim.lr_scheduler.LinearLR(Agent_optim, 1e-5, 1, total_iters=int(total*0.005))
+    warmup = optim.lr_scheduler.LinearLR(Agent_optim, 1e-5, 1, total_iters=int(total*0.001))
     scheduler = optim.lr_scheduler.SequentialLR(Agent_optim, [warmup, reduce], milestones=[warmup.total_iters])
     memory = []
     ma_reward=0
@@ -168,7 +168,6 @@ if __name__=="__main__":
             if done[i]:
                 state[i] = env.reset(i)  # Shape: string
                 done[i]=False
-        reward_list = [[] for _ in range(env_bs)]
         while not any(done):
             with torch.no_grad():
                 action_logits, state_value = agent(state)  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
@@ -185,7 +184,6 @@ if __name__=="__main__":
             next_state, reward, done, _ = env.step(action)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             for i in range(env_bs):
                 trajectory[i].append([state[i], action[i], dist.log_prob(action)[i], reward[i], done[i], state_value[i]])  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
-                reward_list[i].append(reward[i])
             state = next_state
         # modify memory with revise reward that consider future
         for i in range(env_bs):

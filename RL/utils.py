@@ -196,6 +196,7 @@ class LLMEnv_batch_version:
         self.y = [None] * self.batch_size
         self.d_t = [None] * self.batch_size
         self.basic_reward = [None] * self.batch_size
+        self.log_prob = [None] * self.batch_size
         self.halulu = [None] * self.batch_size
         self.revise_reward = [None] * self.batch_size
         self.hat_y_t = [None] * self.batch_size
@@ -239,7 +240,7 @@ class LLMEnv_batch_version:
             self.x[idx],
             self.cat_response(self.response_cache[idx][-self.history_len:]),
             self.d_t[idx][::2],
-            self.action_history[idx]
+            self.action_history[idx][-self.history_len:]
         )
         return state
 
@@ -263,6 +264,9 @@ class LLMEnv_batch_version:
                     if self.n[i] + 1 < len(self.y[i]):
                         self.n[i] += 1
                         proceed_indices.append(i)
+                    else:
+                        self.done[i]=True
+                        self.actions[i]==-1
                 elif action == 2:  # Rewrite Current Response
                     if self.n[i] > -1:
                         rewrite_indices.append(i)
@@ -282,7 +286,7 @@ class LLMEnv_batch_version:
             responses, log_probs = self.get_next_response(batch_indices)
             for idx, i in enumerate(batch_indices):
                 self.hat_y_t[i] = responses[idx]
-                self.log_prob = log_probs[idx]
+                self.log_prob[i] = log_probs[idx]
                 if i in proceed_indices:
                     self.response_cache[i].append(self.hat_y_t[i])
                 elif i in rewrite_indices:
@@ -290,11 +294,11 @@ class LLMEnv_batch_version:
                     self.response_cache[i].append(self.hat_y_t[i])
 
         for i in range(self.batch_size):
+            if self.steps[i]>2*len(self.y[i])+4:
+                self.done[i]=True
             reward = self.compute_reward(i)
             rewards[i] += reward
             next_states.append(self.get_state(i))
-            if self.steps[i]>3*len(self.y[i])+5:
-                self.done[i]=True
             self.steps[i] += 1
             done_flags.append(self.done[i])
             self.last_action[i] = actions[i]
@@ -303,26 +307,26 @@ class LLMEnv_batch_version:
 
     def compute_reward(self, idx):
         reward = 0
-        if self.done[idx]:
-            if self.n[idx] > -1:
-                reward += 10 * (Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - self.basic_reward[idx])
-                reward += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
-                reward += sum(self.halulu[idx])
         if self.actions[idx] == 1:
             reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
-            self.halulu[idx].append(0.5 * self.log_prob[0].exp().mean() / len(self.y[idx]))
+            self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
         elif self.actions[idx] == 2:
             reward -= 0.01
             if self.n[idx] > -1:
                 reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
                 self.halulu[idx].pop(-1)
-                self.halulu[idx].append(0.5 * self.log_prob[0].exp().mean() / len(self.y[idx]))
+                self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
                 for i in reversed(range(self.steps[idx])):
                     if self.revise_reward[idx][i] > 0:
                         self.revise_reward[idx][i] = 0
                         break
             else:
                 reward += -0.05
+        if self.done[idx]:
+            if self.n[idx] > -1:
+                reward += 10 * (Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - self.basic_reward[idx])
+                reward += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
+                reward += sum(self.halulu[idx])
         reward = float(reward)
         if reward!=reward:
             print("NAN!!")
@@ -589,7 +593,7 @@ class PPOTrainer:
         self.grad_step = grad_step
         
         self.action_coef=1
-        self.value_coef=2**-1
+        self.value_coef=2**1
         self.entropy_coef=2**-8
 
     def ppo_loss(self, old_log_probs, dist:Categorical, batch_actions, advantages, returns, values):

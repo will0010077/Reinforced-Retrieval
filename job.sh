@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=2 #  CPU cores to be used 
 #SBATCH --gres=gpu:1 # Require 8 GPUs to be used
 #SBATCH --mem=128G # memory required per node
-#SBATCH --time=24:00:00 # Set time of the job
+#SBATCH --time=06:00:00 # Set time of the job
 #SBATCH -p defq # Partition/Queue name
 
 #==========================
