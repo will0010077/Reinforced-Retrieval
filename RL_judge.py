@@ -141,7 +141,8 @@ if __name__=="__main__":
     data_path='data/cleandata.jsonl'
     dataset=NQADataset(data_path=data_path)
     
-    env = LLMEnv(dataset, LM, retriever, 3)
+    env_bs = 8
+    env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
     agent.load_state_dict(torch.load("./save/Agent.pt"))
     agent.to(device)
@@ -158,43 +159,48 @@ if __name__=="__main__":
     memory = []
     ma_reward=0
     reward_file = open("reward_number.txt", "a")
+    
+    state=[None]*env_bs
+    trajectory = [[] for _ in range(env_bs)]  # don't do this->[[]]*env_bs
+    done = [True]*env_bs
     for episode in range(total):
-        state = env.reset()  # Shape: string
-        done = False
-        reward_list = []
-        while not done:
+        for i in range(env_bs):
+            if done[i]:
+                state[i] = env.reset(i)  # Shape: string
+                done[i]=False
+        reward_list = [[] for _ in range(env_bs)]
+        while not any(done):
             with torch.no_grad():
-                action_logits, state_value = agent([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
+                action_logits, state_value = agent(state)  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
             action_logits, state_value = action_logits.cpu(), state_value.cpu()
             dist = Categorical(logits = action_logits)
             if torch.rand([1])<0.05 :
-                action = torch.randint(env.action_space_size, [1])
+                action = torch.randint(env.action_space_size, [env_bs])
             else:
                 action = dist.sample()  # Shape: (1,)
             
             # if episode%20==0:
             #     action = torch.tensor(env.steps%3)
-            print(action.item(), end='', flush=True)
-            next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
-            if reward!=reward: # check nan, reach max_len of LLM, the output is empty
-                print("NAN!!!!")
-                env.revise_reward.pop()
-                env.steps -= 1
-                break
-            memory.append([state, action, dist.log_prob(action), reward, done, state_value])  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
-            reward_list.append(reward)
+            print(action[0].item(), end='', flush=True)
+            next_state, reward, done, _ = env.step(action)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+            for i in range(env_bs):
+                trajectory[i].append([state[i], action[i], dist.log_prob(action)[i], reward[i], done[i], state_value[i]])  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
+                reward_list[i].append(reward[i])
             state = next_state
         # modify memory with revise reward that consider future
-        for i in reversed(range(env.steps)):
-            memory[-i-1][3] = env.revise_reward[-i-1]
+        for i in range(env_bs):
+            if done[i]:
+                for j in range(env.steps[i]):
+                    trajectory[i][j][3] = env.revise_reward[i][j]
+                memory.extend(trajectory[i])
+                trajectory[i]=[]
+                ma_reward = 0.95*ma_reward + 0.05*sum(env.revise_reward[i])
+                reward_file.write(f"{sum(env.revise_reward[i]):.5f}\n")
         # print("\r"," "*80,"\r", end='\n')
         # print(env.cat_response(env.response_cache))
-        ma_reward = 0.95*ma_reward + 0.05*sum(env.revise_reward)
-        reward_file.write(f"{sum(env.revise_reward):.5f}\n")
-        print("\nreward: ",ma_reward, end="\r")
+        # print("\nreward: ",ma_reward, end="\n")
         if len(memory)>(512):
             reward_file.flush()
-            print()
             trainer.update(memory)
             memory = []
         scheduler.step()

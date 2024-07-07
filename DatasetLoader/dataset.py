@@ -170,7 +170,7 @@ class NQADataset(Dataset):
                 # if not self.use_doc:
                 #     del line["document"]
                 if self.use_long and line["long_answer"]:
-                    if len(line["long_answer"])>2000 or len(line["long_answer"])<3:
+                    if len(line["long_answer"])>1000 or len(line["long_answer"])<3:
                         skip+=1
                         continue
                     data.append(line)
@@ -462,7 +462,7 @@ def cleandata():
                     continue
                 total_a_lenth.append(len(a.split()))
         if ans or la:
-            if len(la)>2000:
+            if len(la)>1000:
                 continue
             json.dump(dict(short_answers=ans,long_answer=la,question=q), file) #document=d,
             file.write('\n')
