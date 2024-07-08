@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] ="1"
+# os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 
 import sys
@@ -96,41 +96,6 @@ if __name__=="__main__":
     
     print("Initialize Agent...")
     
-    # RL_bs = 64
-    # config = PPOConfig(
-    #     model_name="gpt2",
-    #     learning_rate=1.e-5,
-    #     mini_batch_size = 16,
-    #     batch_size = RL_bs,
-    #     gradient_accumulation_steps = 4,
-    # )
-    # model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, device_map=device)
-    # model.to(device)
-    # gpt2tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-
-    # gpt2tokenizer.pad_token = gpt2tokenizer.eos_token
-    # gpt2tokenizer.padding_side = "left"
-    
-    # ppo_trainer = PPOTrainer(
-    #     model=model,
-    #     config=config,
-    #     tokenizer=gpt2tokenizer,
-    # )
-    # stop_id = [gpt2tokenizer.eos_token_id]
-    # for k,v in gpt2tokenizer.vocab.items():
-    #     if "\"" in k:
-    #         stop_id.append(v)
-    # generation_kwargs = {
-    #     "min_length": -1,
-    #     "top_k": 30,
-    #     "top_p": 0.7,
-    #     "do_sample": True,
-    #     "pad_token_id": gpt2tokenizer.eos_token_id,
-    #     "no_repeat_ngram_size" : 4, 
-    #     "eos_token_id" : stop_id,
-    #     "max_new_tokens" : 16,
-    # }
-    
     # Example usage
     max_epoch = 10
     num_retrieve=1
@@ -144,12 +109,12 @@ if __name__=="__main__":
     env_bs = 64
     env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
-    # agent.load_state_dict(torch.load("./save/Agent30000.pt"))
+    # agent.load_state_dict(torch.load("./save/Agent.pt"))
     agent.to(device)
     
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr*3},
-                               {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas = config.train_config.batas, eps=1e-4)
+                               {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas = config.train_config.betas, eps=1e-4)
     trainer = PPOTrainer(agent, Agent_optim, gamma = 0.99, clip_epsilon=0.2, lambd = 0.95, update_epochs=4, batch_size = 64, grad_step = 1)
     # Training loop
     total = 100000
@@ -173,7 +138,7 @@ if __name__=="__main__":
                 action_logits, state_value = agent(state)  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
             action_logits, state_value = action_logits.cpu(), state_value.cpu()
             dist = Categorical(logits = action_logits)
-            if torch.rand([1])<0.05 :
+            if torch.rand([1])<0.05 or episode<400:
                 action = torch.randint(env.action_space_size, [env_bs])
             else:
                 action = dist.sample()  # Shape: (1,)

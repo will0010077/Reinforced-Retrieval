@@ -333,18 +333,22 @@ class LLMEnv_batch_version:
         if batch_indices:
             refs = [self.cat_response(self.response_cache[idx][-1:]) for idx in batch_indices]
             cands = [self.y[idx][self.n[idx]] for idx in batch_indices]
-            batch_bert =  Bert_score(refs, cands)
+            batch_bert =  list(Bert_score(refs, cands))
             for i, idx in enumerate(batch_indices):
-                rewards[idx] += batch_bert[i] / len(self.y[idx])
-                rewards[idx] = float(rewards[idx])
-                if rewards[idx]!=rewards[idx]:
-                    print("NAN!!")
+                if batch_bert[i]!=batch_bert[i]:
+                    print("bert NAN!!")
                     self.done[idx] = True
-                    rewards[idx]=0
-                rewards[idx] /=  self.steps[idx] - self.last_proceed[idx]+1
+                    batch_bert[i]=0
+                batch_bert[i] /= len(self.y[idx])
+                batch_bert[i] /= self.steps[idx] - self.last_proceed[idx]+1
                 for j in range(self.last_proceed[idx], self.steps[idx]):
-                    self.revise_reward[idx][j] = float(rewards[idx])
+                    self.revise_reward[idx][j] = float(batch_bert[i])
+                rewards[idx]+=batch_bert[i]
         for idx in range(self.batch_size):
+            if rewards[idx]!=rewards[idx]:
+                print("reward NAN!!")
+                self.done[idx] = True
+                rewards[idx]=0
             self.revise_reward[idx].append(rewards[idx])
             
         return rewards
