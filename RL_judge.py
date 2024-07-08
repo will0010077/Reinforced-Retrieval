@@ -141,7 +141,7 @@ if __name__=="__main__":
     data_path='data/cleandata.jsonl'
     dataset=NQADataset(data_path=data_path)
     
-    env_bs = 64
+    env_bs = 32
     env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
     # agent.load_state_dict(torch.load("./save/Agent30000.pt"))
@@ -194,6 +194,9 @@ if __name__=="__main__":
                 trajectory[i]=[]
                 ma_reward = 0.95*ma_reward + 0.05*sum(env.revise_reward[i])
                 reward_file.write(f"{sum(env.revise_reward[i]):.5f}\n")
+        #         print(env.revise_reward[i])
+        # if episode>5:
+        #     exit()
         # print("\r"," "*80,"\r", end='\n')
         # print(env.cat_response(env.response_cache))
         # print("\nreward: ",ma_reward, end="\n")

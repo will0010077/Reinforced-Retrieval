@@ -246,16 +246,15 @@ class LLMEnv_batch_version:
         )
         return state
 
-    def step(self, actions):
+    def step(self, actions:Tensor):
         rewards = [0] * self.batch_size
         next_states = []
-        done_flags = []
 
         retrieve_indices = []
         proceed_indices = []
         rewrite_indices = []
         action_verb=["retrieve","proceed","rewrite"]
-        self.actions = actions
+        self.actions = actions.clone()
         for i, action in enumerate(actions):
             if not self.done[i]:
                 self.action_history[i].append(action_verb[action])
@@ -269,7 +268,7 @@ class LLMEnv_batch_version:
                         proceed_indices.append(i)
                     else:
                         self.done[i]=True
-                        self.actions[i]==-1
+                        self.actions[i]=-1
                 elif action == 2:  # Rewrite Current Response
                     if self.n[i] > -1:
                         self.response_cache[i].pop()
@@ -296,43 +295,60 @@ class LLMEnv_batch_version:
         for i in range(self.batch_size):
             if self.steps[i]>3*len(self.y[i])+4:
                 self.done[i]=True
-            reward = self.compute_reward(i)
-            rewards[i] += reward
+        rewards = self.compute_reward()
+        for i in range(self.batch_size):
             next_states.append(self.get_state(i))
             self.steps[i] += 1
-            done_flags.append(self.done[i])
-            self.last_action[i] = actions[i]
+        self.last_action = actions.clone()
 
-        return next_states, rewards, done_flags, {}
+        return next_states, rewards, self.done, {}
 
-    def compute_reward(self, idx):
-        reward = 0
-        if self.actions[idx] == 1:
-            reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
-            self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
-        elif self.actions[idx] == 2:
-            reward -= 0.01
-            if self.n[idx] > -1:
-                reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
-                self.halulu[idx].pop(-1)
+    def compute_reward(self, ):
+        rewards = [0]*self.batch_size
+        proceed_indices = []
+        rewrite_indices = []
+        for idx in range(self.batch_size):
+            if self.actions[idx] == 1:
+                # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
+                proceed_indices.append(idx)
                 self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
-                reward /=  self.steps[idx] - self.last_proceed[idx]+1
-                for i in range(self.last_proceed[idx], self.steps[idx]):
-                    self.revise_reward[idx][i] = float(reward)
-            else:
-                reward += -0.05
-        if self.done[idx]:
-            if self.n[idx] > -1:
-                reward += 2 * (Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - self.basic_reward[idx])
-                reward += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
-                reward += 0.1 * sum(self.halulu[idx])
-        reward = float(reward)
-        if reward!=reward:
-            print("NAN!!")
-            self.done[idx] = True
-            reward=0
-        self.revise_reward[idx].append(reward)
-        return reward
+            elif self.actions[idx] == 2:
+                rewards[idx] -= 0.01
+                if self.n[idx] > -1:
+                    # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
+                    rewrite_indices.append(idx)
+                    self.halulu[idx].pop(-1)
+                    self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
+                else:
+                    rewards[idx] -= 0.05
+                    
+            if self.done[idx]:
+                if self.n[idx] > -1:
+                    rewards[idx] += 2 * (Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - self.basic_reward[idx])
+                    rewards[idx] += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
+                    rewards[idx] += 0.1 * sum(self.halulu[idx])
+                    rewards[idx]=float(rewards[idx])
+            
+        batch_indices = proceed_indices + rewrite_indices
+        if batch_indices:
+            refs = [self.cat_response(self.response_cache[idx][-1:]) for idx in batch_indices]
+            cands = [self.y[idx][self.n[idx]] for idx in batch_indices]
+            batch_bert =  Bert_score(refs, cands)
+            for i, idx in enumerate(batch_indices):
+                rewards[idx] += batch_bert[i] / len(self.y[idx])
+                rewards[idx] = float(rewards[idx])
+                if rewards[idx]!=rewards[idx]:
+                    print("NAN!!")
+                    self.done[idx] = True
+                    rewards[idx]=0
+                if idx in rewrite_indices:
+                    rewards[idx] /=  self.steps[idx] - self.last_proceed[idx]+1
+                    for j in range(self.last_proceed[idx], self.steps[idx]):
+                        self.revise_reward[idx][j] = float(rewards[idx])
+        for idx in range(self.batch_size):
+            self.revise_reward[idx].append(rewards[idx])
+            
+        return rewards
 
     def construct_query(self, idx):
         return self.x[idx] + self.cat_response(self.response_cache[idx][-self.history_len:])
@@ -639,7 +655,7 @@ class PPOTrainer:
         returns = self.compute_gae(rewards, values, dones, next_value=0)
 
         old_states = old_states # Shape: (memory_size, state_size)
-        old_actions = torch.tensor(old_actions, dtype=torch.float32)  # Shape: (memory_size,)
+        old_actions = torch.tensor(old_actions, dtype=torch.long)  # Shape: (memory_size,)
         old_log_probs = torch.tensor(old_log_probs, dtype=torch.float32)  # Shape: (memory_size,)
         returns = torch.tensor(returns, dtype=torch.float32)  # Shape: (memory_size,)
         values = torch.tensor(values, dtype=torch.float32)  # Shape: (memory_size,)
