@@ -141,7 +141,7 @@ if __name__=="__main__":
     data_path='data/cleandata.jsonl'
     dataset=NQADataset(data_path=data_path)
     
-    env_bs = 32
+    env_bs = 64
     env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
     # agent.load_state_dict(torch.load("./save/Agent30000.pt"))
