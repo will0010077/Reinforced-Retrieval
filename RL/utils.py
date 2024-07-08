@@ -341,10 +341,9 @@ class LLMEnv_batch_version:
                     print("NAN!!")
                     self.done[idx] = True
                     rewards[idx]=0
-                if idx in rewrite_indices:
-                    rewards[idx] /=  self.steps[idx] - self.last_proceed[idx]+1
-                    for j in range(self.last_proceed[idx], self.steps[idx]):
-                        self.revise_reward[idx][j] = float(rewards[idx])
+                rewards[idx] /=  self.steps[idx] - self.last_proceed[idx]+1
+                for j in range(self.last_proceed[idx], self.steps[idx]):
+                    self.revise_reward[idx][j] = float(rewards[idx])
         for idx in range(self.batch_size):
             self.revise_reward[idx].append(rewards[idx])
             

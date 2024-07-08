@@ -9,7 +9,7 @@ train_config = Config(
     num_samples=None,
     lm_lr=1.e-5,
     agent_lr=3.e-5,
-    betas=[0.8, 0.998],
+    betas=[0.9, 0.98],
     weight_decay=0.01,
     topk=1,
     load_E=True,
@@ -41,7 +41,7 @@ agent_size_config = Config(
 lex = Config(
     pre_lr=5.e-5,
     fine_lr=1.e-5,
-    betas=[0.9, 0.999],
+    betas=[0.9, 0.98],
     weight_decay=0.01,
     share_param=True
 )
