@@ -154,7 +154,7 @@ class LLMEnv_batch_version:
             #     proceed_indices.append(idx)
                 self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
             if self.actions[idx] == 2:
-                rewards[idx] -= 0.01
+                rewards[idx] -= 0.002
                 if self.n[idx] > -1:
                     # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
                     # rewrite_indices.append(idx)
