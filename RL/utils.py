@@ -19,167 +19,8 @@ from transformers import BertModel, BertConfig, BertTokenizer, RobertaModel, Rob
 from torch.distributions import Categorical
 from config import agent_size_config
 from tqdm import tqdm
-class transition(tensor_retuen_type):
-    def __init__(self, *args, **kwargs):
-        '''
-        inputs
-        preds
-        ret
-        neg
-        rewards
-        '''
-        super().__init__(*args, **kwargs)
-        
-    
-    def __getstate__(self,):
-        return self
-    def __setstate__(self, state):
-        self.update(state)
-        
-    def __str__(self) -> str:
-        return f'inputs:{self.inputs.shape}, preds:{self.preds.shape}, ret:{self.ret.shape}, neg:{self.neg.shape}, rewards:{self.rewards.shape}'
+from itertools import chain
 
-
-class doc_buffer:
-    def __init__(self, max_len=2**14):
-        self.clear()
-        self.max_len=max_len
-    
-    def append(self, t):
-        '''
-        adding a transition to buffer
-        '''
-        self.buffer.append(t)
-        if len(self)>self.max_len:
-            self.buffer.pop(0)
-    
-    def stack(self, name, s:Tensor = None):
-        if s is not None:
-            return torch.stack([self.buffer[i][name] for i in s])
-        return torch.stack([getattr(x, name) for x in self.buffer])
-    
-    def sample(self, bs, shuffle = False):
-        if shuffle:
-            index = torch.randperm(len(self))
-        else:
-            index = torch.arange(len(self))
-        
-        for i in range(0, len(self), bs):
-            yield transition(**{k: self.stack(k, index[i:i+bs]) for k in self.buffer[0]})
-
-        
-    def __len__(self,):
-        return len(self.buffer)
-    def clear(self,):
-        self.buffer = []
-
-
-class PositionalEncoding(nn.Module):
-
-    def __init__(self, d_model: int, dropout: float = 0., max_len: int = 5000, scale=1):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(1, max_len, d_model)
-        pe[0, :, 0::2] = torch.sin(position * div_term)
-        pe[0, :, 1::2] = torch.cos(position * div_term)
-        pe = pe*scale
-        self.register_buffer('pe', pe)
-        self.pe:Tensor
-
-    def forward(self, x: Tensor) -> Tensor:
-        """
-        Arguments:
-            x: Tensor, shape ``[batch_size, seq_len, embedding_dim]``
-        """
-        x = x+ self.pe[:,:x.size(1)]
-        return self.dropout(x)
-    
-class perturb_model(nn.Module):
-    
-    def __init__(self, in_dim=768, dim=768, num_heads=4, num_layers=2, dropout=0.1):
-        super().__init__()
-        self.layer = torch.nn.TransformerEncoderLayer(d_model=dim, nhead=num_heads, dim_feedforward=dim, dropout=dropout,batch_first=True)
-        self.model=torch.nn.TransformerEncoder(self.layer, num_layers)
-        # self.model = torch.nn.ModuleList([torch.nn.MultiheadAttention(dim, num_heads, batch_first=True) for _ in range(num_layers)])
-        self.pos_encoder = PositionalEncoding(dim, dropout=dropout, max_len=16)
-        self.dim=dim
-        self.in_dim=in_dim
-        
-        self.scale1=torch.nn.Linear(in_dim, dim, bias=True)
-        self.scale2=torch.nn.Linear(dim, in_dim, bias=True)
-        torch.nn.init.zeros_(self.scale2.weight.data)
-        torch.nn.init.zeros_(self.scale2.bias.data)
-        self.value = torch.nn.Linear(dim, 1)
-                    
-    def forward(self, x:torch.Tensor, mask=None)->Tensor:
-        '''
-        x: (B,n,d)
-        mask: (n,n)
-        out: shape of x
-        '''
-        x = self.scale1(x)
-        x = self.pos_encoder(x)
-        
-        if mask is None:
-            mask = torch.nn.Transformer.generate_square_subsequent_mask(x.shape[1], x.device)
-        x=self.model.forward(x, mask)# + x #  (torch.nn.functional.sigmoid(self.lam))
-            
-        out = self.scale2(x)
-        value = self.value(x)
-        return out, value
-    
-    
-class Transformer_Agent(nn.Module):
-    def __init__(self, in_dim, dim=768, **kwargs):
-        super().__init__()
-        self.model = perturb_model(in_dim, dim, **kwargs)
-    def forward(self, x):
-        '''
-        forward output y with nromalize and value
-        '''
-        y, v=self.model.forward(x)
-        y = F.relu_(y+x)
-        y = F.normalize(y, dim=-1)
-        return y, v
-    
-    @torch.no_grad()
-    def next(self, x:torch.Tensor):
-        '''
-        x: (B,n,d)
-        output: (B,d)
-        '''
-        x, v = self.forward(x)
-        
-        return x[:,-1,:]
-    
-    def get_loss(self, t:transition)->Tensor:
-        '''
-        Reinforce algorithm
-        return : loss (B,k)
-        '''
-        t.neg#(([32, 5, 16, 30522]))
-        outputs, value = self.forward(t.inputs)#(32,5,30522)
-        temperture = 1
-        # get neg
-        neg = (outputs[:,:,None,:] @ t.neg.permute([0,1,3,2])).squeeze(-2)/temperture#(32,5,16)
-        pos = (outputs[:,:,None,:] @ t.ret[...,None])[:,:,0,0]/temperture#(32,5)
-        # get maximum number to prevent overflow
-        M = torch.max(neg, dim=-1, keepdim=True).values#(32,5,1)
-        # log_softmax function
-        log_pi = pos - M[:,:,0] - (neg-M).exp().sum(-1).log()
-        
-        adv = t.rewards[:,None] - value[...,0]
-        v_loss = adv**2
-        pi_loss = - adv.detach() * log_pi
-        # regularization to original input query
-        reg_loss = ((outputs - t.inputs).norm(dim=-1))
-        # FLOPS loss
-        flops_loss = torch.abs(outputs).sum(-1)**2
-        return pi_loss, v_loss, reg_loss, flops_loss   
-    
     
 class LLMEnv_batch_version:
     def __init__(self, dataset, LM: EncTunedLM, ret: doc_retriever, action_space_size, history_len=6, batch_size=8):
@@ -309,14 +150,14 @@ class LLMEnv_batch_version:
         rewrite_indices = []
         for idx in range(self.batch_size):
             if self.actions[idx] == 1:
-                # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
-                proceed_indices.append(idx)
+            #     # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
+            #     proceed_indices.append(idx)
                 self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
-            elif self.actions[idx] == 2:
+            if self.actions[idx] == 2:
                 rewards[idx] -= 0.01
                 if self.n[idx] > -1:
                     # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
-                    rewrite_indices.append(idx)
+                    # rewrite_indices.append(idx)
                     self.halulu[idx].pop(-1)
                     self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
                 else:
@@ -324,26 +165,26 @@ class LLMEnv_batch_version:
                     
             if self.done[idx]:
                 if self.n[idx] > -1:
-                    rewards[idx] += 2 * (Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - self.basic_reward[idx])
+                    rewards[idx] += 3*Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - 2*self.basic_reward[idx]
                     rewards[idx] += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
                     rewards[idx] += 0.1 * sum(self.halulu[idx])
                     rewards[idx]=float(rewards[idx])
             
-        batch_indices = proceed_indices + rewrite_indices
-        if batch_indices:
-            refs = [self.cat_response(self.response_cache[idx][-1:]) for idx in batch_indices]
-            cands = [self.y[idx][self.n[idx]] for idx in batch_indices]
-            batch_bert =  list(Bert_score(refs, cands))
-            for i, idx in enumerate(batch_indices):
-                if batch_bert[i]!=batch_bert[i]:
-                    print("bert NAN!!")
-                    self.done[idx] = True
-                    batch_bert[i]=0
-                batch_bert[i] /= len(self.y[idx])
-                batch_bert[i] /= self.steps[idx] - self.last_proceed[idx]+1
-                for j in range(self.last_proceed[idx], self.steps[idx]):
-                    self.revise_reward[idx][j] = float(batch_bert[i])
-                rewards[idx]+=batch_bert[i]
+        # batch_indices = proceed_indices + rewrite_indices
+        # if batch_indices:
+        #     refs = [self.cat_response(self.response_cache[idx][-1:]) for idx in batch_indices]
+        #     cands = [self.y[idx][self.n[idx]] for idx in batch_indices]
+        #     batch_bert =  list(Bert_score(refs, cands))
+        #     for i, idx in enumerate(batch_indices):
+        #         if batch_bert[i]!=batch_bert[i]:
+        #             print("bert NAN!!")
+        #             self.done[idx] = True
+        #             batch_bert[i]=0
+        #         batch_bert[i] /= len(self.y[idx])
+        #         batch_bert[i] /= self.steps[idx] - self.last_proceed[idx]+1
+        #         for j in range(self.last_proceed[idx], self.steps[idx]):
+        #             self.revise_reward[idx][j] = float(batch_bert[i])
+        #         rewards[idx]+=batch_bert[i]
         for idx in range(self.batch_size):
             if rewards[idx]!=rewards[idx]:
                 print("reward NAN!!")
@@ -414,7 +255,7 @@ class LLMEnv:
         return self.get_state()
 
     def get_state(self)->str:
-        state = self.collate.state_templete(self.x, self.cat_response(self.response_cache[-self.history_len:]), self.d_t[...,::2], self.action_history)
+        state = self.collate.state_templete(self.x, self.cat_response(self.response_cache[-self.history_len:]), self.d_t[0,::2], self.action_history)
         return state
 
     def step(self, action):
@@ -462,7 +303,7 @@ class LLMEnv:
         reward=0
         if self.done:
             if self.n>-1:
-                reward += 10*(Bert_score([self.cat_response(self.response_cache)], [" ".join(self.y)])[0] - self.basic_reward)
+                reward += 2*(Bert_score([self.cat_response(self.response_cache)], [" ".join(self.y)])[0] - self.basic_reward)
                 reward += 0.1*((self.n+1)/len(self.y))**2
                 reward += sum(self.halulu)
         # elif self.action == 0:
@@ -540,7 +381,8 @@ class LLMEnv_test(LLMEnv):
     
     def step(self, action):
         reward = 0
-        self.action = action
+        if action ==0 and self.last_action==0:
+            action = 1
         if action == 0:  # Retrieve Document
             self.action_history.append("retrieve")
             if self.last_action!=0:
@@ -560,14 +402,14 @@ class LLMEnv_test(LLMEnv):
                 self.response_cache.append(self.hat_y_t[0])
         elif action == 3:  # Output Answer
             self.done = True
-        if self.eos_id in self.hat_y_t[0]:
+        if len(self.response_cache)>1 and self.eos_id in self.hat_y_t[0]:
             self.done=True
         if len(self.action_history)>self.history_len:
             self.action_history.pop(0)
         self.steps += 1
         next_state = self.get_state()
         
-        self.last_action=self.action
+        self.last_action=action
         return next_state, reward, self.done, {}
     def compute_reward(self):
         return 0
@@ -600,7 +442,7 @@ class BertAgentCritic(nn.Module):
         return action_logits, state_value  # Shapes: (batch_size, action_space_size), (batch_size,)
 
 class PPOTrainer:
-    def __init__(self, model:BertAgentCritic, optimizer, gamma=0.99, clip_epsilon=0.2, lambd=0.95, update_epochs=4, batch_size=32, grad_step = 4):
+    def __init__(self, model:BertAgentCritic, optimizer:torch.optim.Optimizer, gamma=0.99, clip_epsilon=0.2, lambd=0.95, update_epochs=4, batch_size=32, grad_step = 4):
         self.model = model
         self.optimizer = optimizer
         self.gamma = gamma
@@ -612,7 +454,10 @@ class PPOTrainer:
         
         self.action_coef=1
         self.value_coef=2**-1
-        self.entropy_coef=2**-6
+        
+        self.max_entr = 2**-6
+        self.min_entr = 2**-9
+        self.entropy_coef=2**-7
 
     def ppo_loss(self, old_log_probs, dist:Categorical, batch_actions, advantages, returns, values):
         # old_log_probs shape: (batch_size,)
@@ -679,13 +524,21 @@ class PPOTrainer:
                 dist = Categorical(logits=logits)  # Shape: (batch_size,)
 
                 actor_loss, value_loss, entropy_loss = self.ppo_loss(batch_old_log_probs, dist, batch_actions, batch_advantages, batch_returns, state_values)  # Shape: scalar
-                bar.set_postfix_str(f"ac: {actor_loss:.3f}, value: {value_loss:.3f}, entropy: {-entropy_loss:.3f}")
-                bar.update()
+                if -entropy_loss>0.6:
+                    self.entropy_coef/=1.05
+                    self.entropy_coef = max(self.min_entr, self.entropy_coef)
+                else:
+                    self.entropy_coef*=1.05
+                    self.entropy_coef = min(self.max_entr, self.entropy_coef)
+                    
                 self.optimizer.zero_grad()
                 loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*entropy_loss
                 loss.backward()
                 if step%self.grad_step==0:
+                    torch.nn.utils.clip_grad_norm_(chain(*[self.optimizer.param_groups[param_i]['params'] for param_i in [0,1,2]]), 1.0)
                     self.optimizer.step()
+            bar.set_postfix_str(f"ac: {actor_loss:.3f}, value: {value_loss:.3f}, entropy: {-entropy_loss:.3f}")
+            bar.update(len(loader))
 
 
 if __name__=='__main__':

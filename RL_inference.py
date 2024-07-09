@@ -39,7 +39,9 @@ if __name__=="__main__":
     cluster.load('05_29_14_30')
 
     print('Loading LLM')
-    LM = LLaMa_reader(LM_dir, device, token = token, from_pretrained=True)
+    generate_config = config.generate_config
+    generate_config.temperature=0.5
+    LM = LLaMa_reader(LM_dir, device, token = token, from_pretrained=True, generate_config=generate_config)
     dtype = LM.dtype
     num_dims = LM.model.config.hidden_size
     # print(LM.model.config)
@@ -99,8 +101,7 @@ if __name__=="__main__":
             action_logits, state_value = action_logits.cpu(), state_value.cpu()
             # action_prob[0, 1]+=0.2
             # action_prob[0, 2]-=0.2
-            action_prob = torch.log_softmax(action_logits/0.5, dim=-1)  # Shape: (1, action_space_size)
-            dist = Categorical(logits = action_prob)
+            dist = Categorical(logits = action_logits/0.1)
             action = dist.sample()  # Shape: (1,)
             print(action.item(), end=': ', flush=True)
             next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
@@ -111,7 +112,7 @@ if __name__=="__main__":
                 print(env.cat_response(env.response_cache))
             state = next_state
         print(env.cat_response(env.response_cache))
-        if episode>5:
+        if episode>10:
             exit()
     
     

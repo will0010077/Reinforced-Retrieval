@@ -115,7 +115,7 @@ if __name__=="__main__":
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr*3},
                                {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas = config.train_config.betas, eps=1e-4)
-    trainer = PPOTrainer(agent, Agent_optim, gamma = 0.99, clip_epsilon=0.2, lambd = 0.95, update_epochs=4, batch_size = 64, grad_step = 1)
+    trainer = PPOTrainer(agent, Agent_optim, gamma = 1.0, clip_epsilon=0.2, lambd = 0.95, update_epochs=4, batch_size = 64, grad_step = 1)
     # Training loop
     total = 100000
     reduce = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)

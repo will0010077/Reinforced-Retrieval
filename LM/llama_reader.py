@@ -104,7 +104,7 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
         return output, None, past_key_value
 
 class LLaMa_reader(torch.nn.Module):
-    def __init__(self, model_dir, device, token, from_pretrained=True):
+    def __init__(self, model_dir, device, token, from_pretrained=True, generate_config = generate_config):
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, lstrip=False, token=token)
         self.tokenizer.model_max_length=2048
