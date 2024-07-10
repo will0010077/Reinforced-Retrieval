@@ -82,7 +82,7 @@ if __name__=="__main__":
     data_path='data/cleandata.jsonl'
     dataset=NQADataset(data_path=data_path)
     
-    env = LLMEnv_test(dataset, LM, retriever, 3)
+    env = LLMEnv_test([*dataset][:64], LM, retriever, 3)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
     agent.to(device)
     agent.load_state_dict(torch.load("./save/Agent.pt", map_location="cpu"))
@@ -108,8 +108,7 @@ if __name__=="__main__":
             if reward!=reward: # check nan, don't know why
                 break
             reward_list.append(reward)
-            if action.item()!=0:
-                print(env.cat_response(env.response_cache))
+            print(env.cat_response(env.response_cache))
             state = next_state
         print(env.cat_response(env.response_cache))
         if episode>10:

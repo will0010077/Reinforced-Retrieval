@@ -21,6 +21,7 @@ from fintune_contriver import NQADataset
 from metric.reward import BLEU_score, Bert_score
 import yaml
 import peft
+from time import time
 
 from transformers import AutoTokenizer
 import config
@@ -109,7 +110,7 @@ if __name__=="__main__":
     env_bs = 64
     env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
-    # agent.load_state_dict(torch.load("./save/Agent.pt"))
+    agent.load_state_dict(torch.load("./save/Agent.pt"))
     agent.to(device)
     
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
@@ -117,7 +118,7 @@ if __name__=="__main__":
                                {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas = config.train_config.betas, eps=1e-4)
     trainer = PPOTrainer(agent, Agent_optim, gamma = 1.0, clip_epsilon=0.2, lambd = 0.95, update_epochs=4, batch_size = 64, grad_step = 1)
     # Training loop
-    total = 100000
+    total = 300000
     reduce = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
     warmup = optim.lr_scheduler.LinearLR(Agent_optim, 1e-5, 1, total_iters=int(total*0.001))
     scheduler = optim.lr_scheduler.SequentialLR(Agent_optim, [warmup, reduce], milestones=[warmup.total_iters])
@@ -125,12 +126,16 @@ if __name__=="__main__":
     ma_reward=0
     reward_file = open("reward_number.txt", "a")
     
-    state=[None]*env_bs
     trajectory = [[] for _ in range(env_bs)]  # don't do this->[[]]*env_bs
     done = [True]*env_bs
-    for episode in range(total):
+    state=[None]*env_bs
+    episode=0
+    save_time = time()
+    while True:
         for i in range(env_bs):
             if done[i]:
+                scheduler.step()
+                episode+=1
                 state[i] = env.reset(i)  # Shape: string
                 done[i]=False
         while not any(done):
@@ -169,10 +174,10 @@ if __name__=="__main__":
             reward_file.flush()
             trainer.update(memory)
             memory = []
-        scheduler.step()
-        if (episode+1)%2000==0:
+        if time()-save_time>30*60:
             #save Agent weight
             torch.save(agent.state_dict(), "./save/Agent.pt")
+            save_time = time()
     exit()
     
     

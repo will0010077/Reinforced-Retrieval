@@ -154,7 +154,7 @@ class LLMEnv_batch_version:
             #     proceed_indices.append(idx)
                 self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
             if self.actions[idx] == 2:
-                rewards[idx] -= 0.002
+                rewards[idx] -= 0.0001
                 if self.n[idx] > -1:
                     # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
                     # rewrite_indices.append(idx)
@@ -456,7 +456,7 @@ class PPOTrainer:
         self.value_coef=2**-1
         
         self.max_entr = 2**-6
-        self.min_entr = 2**-9
+        self.min_entr = 2**-10
         self.entropy_coef=2**-7
 
     def ppo_loss(self, old_log_probs, dist:Categorical, batch_actions, advantages, returns, values):
@@ -524,7 +524,7 @@ class PPOTrainer:
                 dist = Categorical(logits=logits)  # Shape: (batch_size,)
 
                 actor_loss, value_loss, entropy_loss = self.ppo_loss(batch_old_log_probs, dist, batch_actions, batch_advantages, batch_returns, state_values)  # Shape: scalar
-                if -entropy_loss>0.6:
+                if -entropy_loss>0.9:
                     self.entropy_coef/=1.05
                     self.entropy_coef = max(self.min_entr, self.entropy_coef)
                 else:
