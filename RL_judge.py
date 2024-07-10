@@ -110,7 +110,7 @@ if __name__=="__main__":
     env_bs = 64
     env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
-    agent.load_state_dict(torch.load("./save/Agent.pt"))
+    # agent.load_state_dict(torch.load("./save/Agent.pt"))
     agent.to(device)
     
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
@@ -118,7 +118,7 @@ if __name__=="__main__":
                                {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas = config.train_config.betas, eps=1e-4)
     trainer = PPOTrainer(agent, Agent_optim, gamma = 1.0, clip_epsilon=0.2, lambd = 0.95, update_epochs=4, batch_size = 64, grad_step = 1)
     # Training loop
-    total = 300000
+    total = 500000
     reduce = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
     warmup = optim.lr_scheduler.LinearLR(Agent_optim, 1e-5, 1, total_iters=int(total*0.001))
     scheduler = optim.lr_scheduler.SequentialLR(Agent_optim, [warmup, reduce], milestones=[warmup.total_iters])
@@ -143,7 +143,7 @@ if __name__=="__main__":
                 action_logits, state_value = agent(state)  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
             action_logits, state_value = action_logits.cpu(), state_value.cpu()
             dist = Categorical(logits = action_logits)
-            if torch.rand([1])<0.05 or episode<400:
+            if torch.rand([1])<0.05 or episode<1000:
                 action = torch.randint(env.action_space_size, [env_bs])
             else:
                 action = dist.sample()  # Shape: (1,)
