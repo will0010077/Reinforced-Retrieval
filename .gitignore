@@ -1,9 +1,13 @@
 __pycache__
 *.json
+*.jsonl
 *.pt
+*.pth
 *.pdf
 *.zip
 *.log
+/reward_number.txt
 data/
 save/
 huggingface/
+pdf_reader/error_lines.txt

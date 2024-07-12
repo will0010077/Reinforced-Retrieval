@@ -8,6 +8,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel,AutoModelWithLMHead, BertTokenizerFast
 from transformers import BertModel, BertConfig, BertLMHeadModel, AutoModelForMaskedLM
+from config import cluster_config
 import logging
 from functools import reduce
 from torch.utils.data import DataLoader
@@ -15,10 +16,6 @@ from tqdm import tqdm
 import pickle
 import random
 import yaml
-with open('config.yaml', 'r') as yamlfile:
-    config = yaml.safe_load(yamlfile)
-
-seed = config['seed']
 
 
 class lex_encoder(torch.nn.Module):
@@ -122,7 +119,7 @@ class lex_retriever(torch.nn.Module):
 
             # sparse_feature = [top_k_sparse(v, 128).cpu() for v in feature]
             feature = F.normalize(feature, dim=-1)
-            sparse_feature = top_k_sparse(feature, config['cluster_config']['k_sparse']) # (bs, d) with sparse
+            sparse_feature = top_k_sparse(feature, cluster_config.k_sparse) # (bs, d) with sparse
             feature_list.append(sparse_feature.cpu()) # (len, bs, d)
         return  torch.cat(feature_list)
     def collate(self, ids):

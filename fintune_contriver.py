@@ -15,13 +15,13 @@ from transformers import AutoTokenizer, AutoModel, BertTokenizerFast
 import yaml,os
 from DocBuilder.LexMAE import lex_retriever
 from DocBuilder.utils import top_k_sparse, tensor_retuen_type
-with open('config.yaml', 'r') as yamlfile:
-    config = yaml.safe_load(yamlfile)
+from DatasetLoader.dataset import NQADataset
+import config
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 # from contriver import Contriever
-seed = config['seed']
+seed = config.seed
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -148,8 +148,8 @@ def trainer(epoch, model:nn.Module, early_stop=None):
         with torch.no_grad():
             _,ids=torch.topk((q@a.T).to_dense(),5,largest=True)#(N,5)
             eye=torch.arange(len(q))[:,None].to(device)
-            sparse_error = 0.5*torch.norm(q - top_k_sparse(q.detach(), config['cluster_config']['k_sparse']).to_dense(), dim=-1).mean()
-            sparse_error += 0.5*torch.norm(a - top_k_sparse(a.detach(), config['cluster_config']['k_sparse']).to_dense(), dim=-1).mean()
+            sparse_error = 0.5*torch.norm(q - top_k_sparse(q.detach(), config.cluster_config.k_sparse).to_dense(), dim=-1).mean()
+            sparse_error += 0.5*torch.norm(a - top_k_sparse(a.detach(), config.cluster_config.k_sparse).to_dense(), dim=-1).mean()
 
         acc=(eye==ids).sum()/len(ids)
         ma_acc = 0.99*ma_acc + 0.01*acc
@@ -178,8 +178,8 @@ def validation(model:nn.Module):
             z_a = model(a)
             z_q = F.normalize(z_q, dim=-1)
             z_a = F.normalize(z_a, dim=-1)
-            z_q = top_k_sparse(z_q, config['cluster_config']['k_sparse']).to_dense()
-            z_a = top_k_sparse(z_a, config['cluster_config']['k_sparse']).to_dense()
+            z_q = top_k_sparse(z_q, config.cluster_config.k_sparse).to_dense()
+            z_a = top_k_sparse(z_a, config.cluster_config.k_sparse).to_dense()
             querys.append(z_q.to('cpu'))
             embedding.append(z_a.to('cpu'))
 
@@ -230,9 +230,9 @@ if __name__=='__main__':
     lex_MAE_retriver = nn.DataParallel(lex_MAE_retriver, device_ids=[0,1])
     print(lex_MAE_retriver)
     optimizer = torch.optim.AdamW(lex_MAE_retriver.parameters(), 
-                lr=config['lex']['fine_lr'])
+                lr=config.lex.fine_lr)
     num_epochs=40
-    lr_scher=torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3, cooldown=3, min_lr=config['lex']['fine_lr']/10)
+    lr_scher=torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3, cooldown=3, min_lr=config.lex.fine_lr/10)
     bestacc=0.88
     for i in range(num_epochs):
         loss=trainer(i, lex_MAE_retriver, early_stop=2000)

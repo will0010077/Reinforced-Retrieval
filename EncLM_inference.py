@@ -28,7 +28,7 @@ model_dir = "meta-llama/Llama-2-7b-chat-hf"
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
 if __name__=="__main__":
-    device = 0
+    device = 1
     print('Loading LLM')
     LM = LLaMa_reader(model_dir, 'cpu', token = token, from_pretrained=True)
     dtype = LM.dtype
@@ -50,22 +50,51 @@ if __name__=="__main__":
     max_epoch = 1
     print('Loading dataset...')
     data_path = "data/cleandata.jsonl"
-    dataset = NQADataset(data_path=data_path)
-    loader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=1, collate_fn=collate().collate_q, persistent_workers=True)
+    dataset = NQADataset(data_path=data_path, num_samples=10000)
+    loader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
 
-    for i,(tokens, q_str, a_str, a_tokens) in enumerate(loader):
+    ori_bert_list = []
+    pre_bert_list = []
+    ori_bleu_list = []
+    pre_bleu_list = []
+    f = open("moniter.txt", "a")
+    for i,(tokens, unlabel, unlabel_str,  q_str, a_str, a_tokens) in enumerate(loader):
         
         tokens = tokens.to(device)
+        del tokens['labels']
+        tokens.input_ids = tokens.input_ids[:,:128]
+        tokens.attention_mask = tokens.attention_mask[:,:128]
         a_tokens = a_tokens.to(device)
         
         with torch.no_grad():
             prefix = LM.Enc.forward(a_tokens)
-            message = [q_str[j]+" "+" ".join(a_str[j].split()[:5]) for j in range(len(q_str))]
-            LM_output = LM.generate(message, prefix=prefix, max_new_tokens=256)
+            message = [unlabel_str[j] for j in range(len(unlabel_str))]
+            output_pre = LM.generate(message, Doc_tokens=a_tokens, max_new_tokens=256)
+            message = [a_str[j]+ unlabel_str[j] for j in range(len(unlabel_str))]
+            output_ori = LM.generate(message, Doc_tokens=None, max_new_tokens=256)
 
-        LM_output = [ LM_output[j][len(q_str[j]):] for j in range(len(q_str))]
+        # output_ori = [ output_ori[j][len(q_str[j]):] for j in range(len(q_str))]
+        # output_pre = [ output_pre[j][len(q_str[j]):] for j in range(len(q_str))]
+
+        ori_bert=Bert_score(output_ori, list(a_str))
+        pre_bert=Bert_score(output_pre, list(a_str))
+
+        ori_bleu=BLEU_score(output_ori, list(a_str))
+        pre_bleu=BLEU_score(output_pre, list(a_str))
+
+        ori_bert_list+=ori_bert
+        pre_bert_list+=pre_bert
+
+        ori_bleu_list+=ori_bleu
+        pre_bleu_list+=pre_bleu
+
+        for j in range(len(q_str)):
+            f.write(f"Prompt: {message[j]}\nGround truth: {a_str[j]}\n[{ori_bert[j]:.3f}, {ori_bleu[j]:.3f}]Original response: {output_ori[j]}\n[{pre_bert[j]:.3f}, {pre_bleu[j]:.3f}]Prifix response: {output_pre[j]}\n"+"="*80+"\n")
         
-        print(LM_output, list(a_str))
-        print("bert:", Bert_score(LM_output, list(a_str)))
+        # print(LM_output, list(a_str))
         if i==10:
             break
+    print("ori bert:", sum(ori_bert_list)/len(ori_bert_list))
+    print("prefix bert:", sum(pre_bert_list)/len(pre_bert_list))
+    print("ori bleu:", sum(ori_bleu_list)/len(ori_bleu_list))
+    print("prefix bleu:", sum(pre_bleu_list)/len(pre_bleu_list))

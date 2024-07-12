@@ -161,17 +161,22 @@ class NQADataset(Dataset):
         self.data = self.load_data()
     def load_data(self):
         data = []
+        skip = 0
         with open(self.data_path, 'r', encoding='utf-8') as f:
             for idx, line in enumerate(f):
                 if idx == self.num_samples:
                     break
                 line = json.loads(line)
-                if not self.use_doc:
-                    del line["document"]
+                # if not self.use_doc:
+                #     del line["document"]
                 if self.use_long and line["long_answer"]:
+                    if len(line["long_answer"])>1000 or len(line["long_answer"])<3:
+                        skip+=1
+                        continue
                     data.append(line)
                 elif not self.use_long and line["short_answers"]:
                     data.append(line)
+        print("skip:",skip)
         return data
 
     def __len__(self):
@@ -180,14 +185,17 @@ class NQADataset(Dataset):
     def __getitem__(self, idx):
 
         q=self.data[idx]['question']
-        la=re.sub('<[/a-zA-Z0-9]*>', '',string=self.data[idx]['long_answer'])
+        if self.use_long:
+            a = self.data[idx]['long_answer']
+        else:
+            a = self.data[idx]['short_answers']
         #dict_keys(['document_text', 'long_answer_candidates', 'question_text', 'annotations', 'document_url', 'example_id'])
 
         # a=sample['annotations'][0]['long_answer']#sample['long_answer_candidates'][random_number]
 
         # long_answer=' '.join(sample['document_text'].split()[a['start_token']:a['end_token']])
 
-        return q, la#str(sample['question_text']),long_answer#text_without_tags
+        return q, a#str(sample['question_text']),long_answer#text_without_tags
 
 def text_normal(text):
     if isinstance(text, list):
@@ -199,16 +207,26 @@ def text_normal(text):
     text = text.strip()
     text=re.sub("(<[^<>]{1,20}>)", '', text)
     text = re.sub(" +", " ", text)
-    text = (text.replace(" \'s", "\'s")
-        .replace(" :", ":")
-        .replace(" ;", "\;")
-        .replace(" ,", ",")
-        .replace(" .", ".")
-        .replace("( ", "(")
-        .replace(" )", ")")
-        .replace(" - ", "-")
-        
-    )
+    replace_word = {" \'s": "\'s",
+    "s \' ": "s\' ",
+    " \'m": "\'m",
+    " \'d": "\'d",
+    " \'ll": "\'ll",
+    " n\'t": "n\'t",
+    " \'re": "\'re",
+    " :": ":",
+    " ;": ";",
+    " ,": ",",
+    " .": ".",
+    "( ": "(",
+    " )": ")",
+    " - ": "-",
+    " -- ": "--",
+    "`` ": "\"",
+    " \'\'": "\"",
+    }
+    for k,v in replace_word.items():
+        text = text.replace(k, v)
     text = re.sub("\.+", ".", text)
 
     #<Th_colspan="2">
@@ -444,7 +462,9 @@ def cleandata():
                     continue
                 total_a_lenth.append(len(a.split()))
         if ans or la:
-            json.dump(dict(short_answers=ans,long_answer=la,document=d,question=q), file)
+            if len(la)>1000:
+                continue
+            json.dump(dict(short_answers=ans,long_answer=la,question=q), file) #document=d,
             file.write('\n')
     file.close()
 

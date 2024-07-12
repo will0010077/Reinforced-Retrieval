@@ -6,11 +6,9 @@ import torch
 
 from torch import nn, Tensor
 from transformers import AutoTokenizer, AutoModel, BertConfig, BertModel
-import yaml
+from config import enc_size_config
 
-with open('config.yaml', 'r') as yamlfile:
-    config = yaml.safe_load(yamlfile)
-config = config['Enc_size_config']
+config = enc_size_config
 bert_dir = "huggingface/bert"
 tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
 # token = tokenizer.convert_ids_to_tokens(torch.arange(1000)) #998-104
@@ -51,11 +49,11 @@ class KnowEncoder(torch.nn.Module):
 
 
         # cat special token for output fixed length of embedding, update attention mask length
-        x.input_ids = torch.cat([self.prefix_tokens.tile([B*k,1]), x.input_ids], dim = 1)
-        x.attention_mask = torch.cat([torch.ones([B*k, self.num_prefix*self.num_layers], device = x.input_ids.device), x.attention_mask], dim = 1)
+        input_ids = torch.cat([self.prefix_tokens.tile([B*k,1]), x.input_ids], dim = 1)
+        attention_mask = torch.cat([torch.ones([B*k, self.num_prefix*self.num_layers], device = x.input_ids.device), x.attention_mask], dim = 1)
 
 
-        y=self.model(input_ids =x.input_ids, attention_mask = x.attention_mask)
+        y=self.model(input_ids =input_ids, attention_mask = attention_mask)
         
         
         y = y.last_hidden_state[:,:self.num_prefix*self.num_layers,:]#(B*k, P*layer, d)

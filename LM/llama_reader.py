@@ -6,6 +6,8 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.distributions import Categorical
+
 from tqdm import tqdm
 import yaml
 import peft
@@ -13,11 +15,7 @@ from peft.utils import _freeze_adapter, _get_submodules
 from LM.Knowledge_encoder import KnowEncoder
 from peft.tuners.adaption_prompt.config import AdaptionPromptConfig, TRANSFORMERS_MODEL_CONFIG, prepare_config
 import math
-
-
-with open('config.yaml', 'r') as yamlfile:
-    config = yaml.safe_load(yamlfile)
-
+from config import generate_config
 
 sep='</s>'
 eos='</s>'
@@ -105,9 +103,138 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
         output = output.to(previous_dtype)
         return output, None, past_key_value
 
+class LLaMa_reader(torch.nn.Module):
+    def __init__(self, model_dir, device, token, from_pretrained=True, generate_config = generate_config):
+        super().__init__()
+        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, lstrip=False, token=token)
+        self.tokenizer.model_max_length=2048
+        self.tokenizer.padding_side='left'
+        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.eos_id=self.tokenizer.eos_token_id
+        self.eos=self.tokenizer.eos_token
+
+        self.generate_config=generate_config
+        if from_pretrained:
+            self.model=AutoModelForCausalLM.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.bfloat16)
+        else:
+            LM_config = LlamaConfig.from_pretrained(model_dir, token=token, device_map=device)
+            self.model=LlamaForCausalLM(LM_config).to(LM_config.torch_dtype)
+            self.model.generation_config = GenerationConfig.from_pretrained(model_dir)
+        self.dtype = self.model.config.torch_dtype
+        # print(self.model)
+        self.model.generation_config.pad_token_id = self.tokenizer.pad_token_id
+        self.model.generation_config.stop_strings=[]
+        self.model.train(True)
+        self.model.requires_grad_(False)
+        self.config = self.model.config
+        # for par in self.model._parents['Enc']:
+        #     getattr(par, self.module_name).adaption_gate.requires_grad_(True)
+        # for p in self.model.parameters():
+        #     p.requires_grad_(False)
+        self.chat_history = []
+        self.system_prompt = ''
+        self.external=None
+    @property
+    def device(self):
+        return self.model.device
+    def forward(self, tokens, return_logits = False)->tuple[Tensor, Tensor]:
+        '''
+        forward function for teacher forcing\\
+        the shape of tokens is (B,n)\\
+        output: lm_logits(B,n), loss(B)
+        '''
+
+        # print(self.model.model.model.embed_tokens.weight.device, tokens.input_ids.device, prefix[0].device)
+        
+        output = self.model(**tokens)
+        lm_logits:Tensor = output.logits
+        labels:Tensor
+        if not return_logits:
+            del output.logits
+        del output.past_key_values
+        loss=None
+
+        labels = tokens.get('labels', None)
+        if labels is not None:
+            del tokens['labels']
+            # Shift so that tokens < n predict n
+
+            logp = torch.log_softmax(lm_logits, dim=-1)
+            shift_logp = logp[..., :-1, :]
+            labels[tokens['attention_mask']==0]=-100
+            shift_labels = labels[..., 1:]
+            
+            loss = -shift_logp[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
+            mask = shift_labels==-100
+            loss = loss.masked_fill_(mask, 0)
+            
+            loss = loss.sum(-1)/(~mask).sum(-1)
+
+        
+        return lm_logits, loss
+
+    @torch.inference_mode()
+    def generate(self, message, cache = None,  max_new_tokens = 1024, streamer=False, stop_strings=[], decode = True):
+        '''
+        for inference, batch size is one.
+        '''
+        #tokenize
+        if streamer:
+            streamer = TextStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+        else:
+            streamer = None
+        tokens = self.tokenizer(message, padding=True ,truncation=True,return_tensors='pt')
+        tokens = tokens.to(self.model.device)
+        
+        self.model.generation_config.stop_strings.extend(stop_strings)
+        outputs = self.model.generate(**tokens,
+                                        streamer=streamer,
+                                        max_new_tokens=max_new_tokens,
+                                        past_key_values = cache,
+                                        **self.generate_config)
+        
+        [self.model.generation_config.stop_strings.pop(-1) for _ in range(len(stop_strings))]
+
+        outputs = [outputs[j][len(tokens.input_ids[0]):].cpu() for j in range(len(tokens.input_ids))]
+        if decode:
+            outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=False)
+        # self.chat_history.append([message, output])[:,tokens.input_ids.shape[1]:]
+        return outputs
+    
+    
+    @torch.inference_mode()
+    def pseudo_generate(self, messages:list[str], forcing:list[str], temperture = 1, return_prob = False, decode = True,  **kwargs):
+        if isinstance(messages, str):
+            messages = [messages]
+        if isinstance(forcing, str):
+            forcing = [forcing]
+        cat = [m+" "+f+self.eos for m, f in zip(messages, forcing)]
+        unlabel = self.tokenizer(text=messages).input_ids
+        unlabel_len = [len(m) for m in unlabel]
+        # print(max([len(s) for s in unlabel]))
+        tokens = self.tokenizer(text=cat, return_tensors='pt', padding=True, max_length=1024, truncation =True,)
+        tokens = tokens.to(self.model.device)
+        
+        lm_logits, loss = self.forward(tokens, return_logits = True, **kwargs)
+        dist = Categorical(logits=lm_logits/temperture)
+        
+        top_token = dist.sample()
+        cut_token = [top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1] for i in range(len(messages))]
+        if decode:
+            output = self.tokenizer.batch_decode(cut_token, skip_special_tokens=False)
+        else:
+            output = cut_token
+        if return_prob:
+            log_prob = dist.log_prob(top_token)
+            token_prob = [log_prob[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1].cpu() for i in range(len(messages))]
+            return output, token_prob
+        return output
+        
+
 class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
 
-    def __init__(self, LM:AutoModelForCausalLM, Enc:KnowEncoder, configs: Dict, adapter_name: str):
+    def __init__(self, LM:LLaMa_reader, Enc:KnowEncoder, configs: Dict, adapter_name: str):
         
         nn.Module.__init__(self)
         self.model = LM
@@ -128,10 +255,12 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
         self._mark_only_adaption_prompts_as_trainable(self.model)
         self.module_name = prepare_config(peft.AdaptionPromptConfig, self.model).target_modules
 
-
     def forward(self, *args, Doc_tokens = None, k = 1, use_ref = False, **kwargs):
 
-        prefix = self.Enc.forward(Doc_tokens)
+        if Doc_tokens is not None:
+            prefix = self.Enc.forward(Doc_tokens)
+        else:
+            prefix = None
         self._set_prefix(prefix)
         output = self.model.forward(*args, **kwargs)
         self._del_prefix(prefix)
@@ -144,11 +273,26 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
 
         return ref_logp, output
     
-    def generate(self, *args, prefix = None, **kwargs):
+    @torch.inference_mode()
+    def pseudo_generate(self, messages:list[str], forcing:list[str], Doc_tokens = None, **kwargs):
         
-
+        if Doc_tokens is not None:
+            prefix = self.Enc.forward(Doc_tokens)
+        else:
+            prefix = None
         self._set_prefix(prefix)
-        output = self.model.generate(*args, **kwargs)
+        output = self.model.pseudo_generate(messages, forcing, **kwargs)
+        self._del_prefix(prefix)
+        return output
+    
+    def generate(self, messages, Doc_tokens = None, **kwargs):
+        
+        if Doc_tokens is not None:
+            prefix = self.Enc.forward(Doc_tokens)
+        else:
+            prefix = None
+        self._set_prefix(prefix)
+        output = self.model.generate(messages, **kwargs)
         self._del_prefix(prefix)
         return output
     
@@ -208,106 +352,41 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
         if prefix is not None:
             for par in self._parents['Enc']:
                 delattr(getattr(par, self.module_name), "adaption_prompt")
+'''We have 40 pounds of product ready to ship, ready to go.
 
-class LLaMa_reader(torch.nn.Module):
-    def __init__(self, model_dir, device, token, from_pretrained=True):
-        super().__init__()
-        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, lstrip=False, token=token)
-        self.tokenizer.model_max_length=2048
-        self.tokenizer.padding_side='left'
-        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.eos_id=self.tokenizer.eos_token_id
-        self.eos=self.tokenizer.eos_token
+Are you ready?
 
-        self.generate_config=config['generate_config']
-        if from_pretrained:
-            self.model=AutoModelForCausalLM.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.bfloat16)
-        else:
-            LM_config = LlamaConfig.from_pretrained(model_dir, token=token, device_map=device, use_cache=True, torch_dtype = torch.bfloat16)
-            LM_config.intermediate_size=768
-            LM_config.hidden_size = 768
-            LM_config.num_hidden_layers=8
-            self.model=LlamaForCausalLM(LM_config).to(torch.bfloat16)
-            self.model.generation_config = GenerationConfig.from_pretrained(model_dir)
-        self.dtype = self.model.config.torch_dtype
-        # print(self.model)
-        self.model.generation_config.pad_token_id = self.tokenizer.pad_token_id
-        self.model.generation_config.stop_strings=[]
-        self.model.train(True)
-        self.model.requires_grad_(False)
-        self.config = self.model.config
-        # for par in self.model._parents['Enc']:
-        #     getattr(par, self.module_name).adaption_gate.requires_grad_(True)
-        # for p in self.model.parameters():
-        #     p.requires_grad_(False)
-        self.chat_history = []
-        self.system_prompt = ''
-        self.external=None
-    @property
-    def device(self):
-        return self.model.device
-    def forward(self, tokens)->tuple[Tensor, Tensor]:
-        '''
-        forward function for teacher forcing\\
-        the shape of ids, target, masks is (B,n)\\
-        the shape of prefix is tuple[(B, n, dim)]\\
-        '''
+Who the hell are you?
 
-        # print(self.model.model.model.embed_tokens.weight.device, tokens.input_ids.device, prefix[0].device)
-        
-        output = self.model(**tokens)
-        lm_logits:Tensor = output.logits
-        logp = torch.log_softmax(lm_logits, dim=-1)
-        labels:Tensor
-        del output.past_key_values, output.logits
-        loss=None
+You know.
 
-        labels = tokens.get('labels', None)
-        if labels is not None:
-            del tokens['labels']
-            # Shift so that tokens < n predict n
+You all know exactly who I am.
 
-            shift_logp = logp[..., :-1, :]
-            labels[tokens['attention_mask']==0]=-100
-            shift_labels = labels[..., 1:]
-            
-            loss = -shift_logp[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
-            mask = shift_labels==-100
-            loss = loss.masked_fill_(mask, 0)
-            
-            loss = loss.sum(-1)/(~mask).sum(-1)
+Say my name.
 
-        
-        return logp, loss
+You what?
 
-    @torch.inference_mode()
-    def generate(self, message, cache = None,  max_new_tokens = 1024, streamer=False, stop_strings=[]):
-        '''
-        for inference, batch size is one.
-        '''
-        #tokenize
-        if streamer:
-            streamer = TextStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
-        else:
-            streamer = None
-        tokens = self.tokenizer(message, padding=True ,truncation=True,return_tensors='pt')
-        tokens = tokens.to(self.model.device)
-        
-        self.model.generation_config.stop_strings.extend(stop_strings)
-        outputs = self.model.generate(**tokens,
-                                        streamer=streamer,
-                                        max_new_tokens=max_new_tokens,
-                                        past_key_values = cache,
-                                        **self.generate_config)
-        
-        [self.model.generation_config.stop_strings.pop(-1) for _ in range(len(stop_strings))]
-        output = self.tokenizer.batch_decode(outputs,skip_special_tokens=True)
-        # self.chat_history.append([message, output])[:,tokens.input_ids.shape[1]:]
-        return output
-    
+I don't have a damn clue who the hell you are.
 
+Yeah, you do.
 
+I'm the cook.
+
+I'm the man who killed Gus Fring.
+
+Bullshit.
+
+Cartel got Fring.
+
+You sure?
+
+That's right.
+
+Now, say my name.
+
+Heisenberg.
+
+You're goddamn right.'''
 
 if __name__=="__main__":
     inferencer = LLaMa_reader("TheBloke/Llama-2-13B-chat-GPTQ")#TaiwanLLaMaGPTQ("weiren119/Taiwan-LLaMa-v1.0-4bits-GPTQ")
