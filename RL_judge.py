@@ -105,7 +105,7 @@ if __name__=="__main__":
 
     print('Loading dataset...')
     data_path='data/cleandata.jsonl'
-    dataset=NQADataset(data_path=data_path)
+    dataset=NQADataset(data_path=data_path,  num_samples=32)
     
     env_bs = 64
     env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
@@ -147,7 +147,7 @@ if __name__=="__main__":
             action_dist = Categorical(logits = action_logits)
             tokens = token_dist.sample()  # Shape:(B,n)
             action = action_dist.sample()  # Shape: (B,)
-            if torch.rand([1])<0.05 or episode<1000:
+            if torch.rand([1])<0.05 or episode<400:
                 action = torch.randint(env.action_space_size, [env_bs])
             else:
                 action = action_dist.sample()  # Shape: (B,)
@@ -155,7 +155,8 @@ if __name__=="__main__":
             # if episode%20==0:
             #     action = torch.tensor(env.steps%3)
             # print("".join([str(a.item()) for a in action]), end='', flush=True)
-            next_state, reward, done, _ = env.step(action, agent.tokenizer.batch_decode(tokens))  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+            querys = agent.tokenizer.batch_decode(tokens)
+            next_state, reward, done, _ = env.step(action, querys)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             token_logp = token_dist.log_prob(tokens)#(B,n)
             for i in filter(lambda x:action[x]!=0, range(len(token_logp))):
                 token_logp[i]=float("-inf")
@@ -180,6 +181,7 @@ if __name__=="__main__":
         # print("\nreward: ",ma_reward, end="\n")
         if len(memory)>(1024):
             reward_file.flush()
+            print(querys[0], env.x[0])
             trainer.update(memory)
             memory = []
         if time()-save_time>30*60:

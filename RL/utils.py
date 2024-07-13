@@ -442,15 +442,16 @@ class BertAgentCritic(nn.Module):
         self.prompt_len = self.prompt_inputs['input_ids'].size(1)
 
     def forward(self, state=None, inputs=None):
+        assert (state is not None and inputs is None) or (state is None and inputs is not None)
         if inputs is None:
         # Tokenize the state and the prompt text
-            state_inputs = self.tokenizer(state, return_tensors="pt", padding=True, truncation=True).to(self.bert.device)
+            inputs = self.tokenizer(state, return_tensors="pt", padding=True, truncation=True).to(self.bert.device)
             
             # Combine the prompt text and state input ids and attention masks
-            inputs = {
-                'input_ids': state_inputs['input_ids'],
-                'attention_mask': state_inputs['attention_mask']
-            }
+        inputs = {
+                'input_ids': inputs['input_ids'],
+                'attention_mask': inputs['attention_mask']
+        }
         
         batch_size = inputs['input_ids'].size(0)
         mask_token_id = self.tokenizer.mask_token_id
@@ -501,6 +502,7 @@ class PPOTrainer:
         self.min_entr = torch.tensor(2**-10)
         self.entropy_coef=torch.tensor(2**-7)
         self.token_entropy_coef=torch.tensor(2**-7)
+        self.sep = collate().datatokenizer.sep_token
 
     def ppo_loss(self, action_logp, action_dist:Categorical, batch_actions, token_logp, token_dist:Categorical, batch_tokens, advantages, returns, values):
         # old_log_probs shape: (batch_size,)
@@ -550,15 +552,18 @@ class PPOTrainer:
             returns.insert(0, gae + values[step])  # Shape: scalar
         return returns  # Shape: (sequence_length,)
     def f(self,batch):
-        batch_states, batch_actions, batch_old_log_probs, batch_tokens, batch_token_logp, batch_returns, batch_advantages = zip(*batch)
-        batch_token = self.model.tokenizer(batch_states, return_tensors = "pt", padding = True, truncation=True)
+        batch_states, batch_actions, batch_old_log_probs, batch_token_action, batch_token_logp, batch_returns, batch_advantages = zip(*batch)
+        
+        batch_token = self.model.tokenizer(batch_states, return_tensors = "pt", padding = True, truncation=True, return_special_tokens_mask =True)
+        questions = [batch_states[i].split(self.sep)[1] for i in range(len(batch_states))]
+        questions_token = self.model.tokenizer(questions, return_tensors = "pt", padding = True, truncation=True, return_special_tokens_mask =True)
         batch_actions = torch.stack(batch_actions)
         batch_old_log_probs = torch.stack(batch_old_log_probs)
-        batch_tokens = torch.stack(batch_tokens)
+        batch_token_action = torch.stack(batch_token_action)
         batch_token_logp = torch.stack(batch_token_logp)
         batch_returns = torch.stack(batch_returns)
         batch_advantages = torch.stack(batch_advantages)
-        return batch_token, batch_actions, batch_old_log_probs, batch_tokens, batch_token_logp, batch_returns, batch_advantages
+        return questions_token, batch_token, batch_actions, batch_old_log_probs, batch_token_action, batch_token_logp, batch_returns, batch_advantages
     def update(self, memory):
         old_states, old_actions, old_log_probs, tokens, token_logp, rewards, dones, values = zip(*memory)
         returns = self.compute_gae(rewards, values, dones, next_value=0)
@@ -575,21 +580,26 @@ class PPOTrainer:
         step = 0
         bar = tqdm(total=self.update_epochs*len(loader), ncols=0)
         for _ in range(self.update_epochs):
-            for batch_token, batch_actions, batch_old_log_probs, batch_tokens, batch_token_logp, batch_returns, batch_advantages in loader:
+            for questions_token, batch_token, batch_actions, batch_old_log_probs, batch_token_action, batch_token_logp, batch_returns, batch_advantages in loader:
                 step+=1
                 batch_token = batch_token.to(self.model.bert.device)  # Shape: (batch_size, n)
                 batch_actions = batch_actions.to(self.model.bert.device)  # Shape: (batch_size,)
                 batch_old_log_probs = batch_old_log_probs.to(self.model.bert.device)  # Shape: (batch_size,)
-                batch_tokens = batch_tokens.to(self.model.bert.device)  # Shape: (batch_size,n)
+                batch_token_action = batch_token_action.to(self.model.bert.device)  # Shape: (batch_size,n)
                 batch_token_logp = batch_token_logp.to(self.model.bert.device)  # Shape: (batch_size,n)
                 batch_returns = batch_returns.to(self.model.bert.device)  # Shape: (batch_size,)
                 batch_advantages = batch_advantages.to(self.model.bert.device)  # Shape: (batch_size,)
-
                 token_logits, action_logits, state_values = self.model.forward(inputs = batch_token)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
-                token_dist = Categorical(logits=token_logits)  # Shape: (batch_size,n)
+                token_dist = Categorical(logits=token_logits)  # Shape: (batch_size,n,V)
                 action_dist = Categorical(logits=action_logits)  # Shape: (batch_size,)
-
-                actor_loss, value_loss, a_entropy_loss, t_entropy_loss = self.ppo_loss(batch_old_log_probs, action_dist, batch_actions, batch_token_logp, token_dist, batch_tokens, batch_advantages, batch_returns, state_values)  # Shape: scalar
+                
+                # maximize the state's token for query dist
+                questions_token = questions_token.to(self.model.bert.device)
+                special_tokens_mask = questions_token.special_tokens_mask
+                query_normal = questions_token.input_ids.T.unsqueeze(-1)#(q_len,64,1)
+                query_norm_loss = -(token_dist.log_prob(query_normal)*(1-special_tokens_mask.T.unsqueeze(-1))).mean() #(512,64,n)
+                
+                actor_loss, value_loss, a_entropy_loss, t_entropy_loss = self.ppo_loss(batch_old_log_probs, action_dist, batch_actions, batch_token_logp, token_dist, batch_token_action, batch_advantages, batch_returns, state_values)  # Shape: scalar
                 if -a_entropy_loss>0.9:
                     self.entropy_coef/=1.05
                 else:
@@ -602,7 +612,7 @@ class PPOTrainer:
                 self.token_entropy_coef = torch.clamp(self.token_entropy_coef, self.min_entr, self.max_entr)
                     
                 self.optimizer.zero_grad()
-                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss+self.token_entropy_coef*t_entropy_loss
+                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss+self.token_entropy_coef*t_entropy_loss + 0.01*query_norm_loss
                 loss.backward()
                 if step%self.grad_step==0:
                     torch.nn.utils.clip_grad_norm_(chain(*[self.optimizer.param_groups[param_i]['params'] for param_i in [0,1,2]]), 1.0)
