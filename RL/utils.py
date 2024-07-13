@@ -497,9 +497,10 @@ class PPOTrainer:
         self.action_coef=1
         self.value_coef=2**-1
         
-        self.max_entr = 2**-6
-        self.min_entr = 2**-10
-        self.entropy_coef=2**-7
+        self.max_entr = torch.tensor(2**-6)
+        self.min_entr = torch.tensor(2**-10)
+        self.entropy_coef=torch.tensor(2**-7)
+        self.token_entropy_coef=torch.tensor(2**-7)
 
     def ppo_loss(self, action_logp, action_dist:Categorical, batch_actions, token_logp, token_dist:Categorical, batch_tokens, advantages, returns, values):
         # old_log_probs shape: (batch_size,)
@@ -518,13 +519,13 @@ class PPOTrainer:
         
         # token action
         new_token_logp = token_dist.log_prob(batch_tokens)
-        ratios = torch.exp(new_token_logp - token_logp)  # Shape: (batch_size,n)
+        ratios = (new_token_logp - token_logp).clamp(-3,3).exp()  # Shape: (batch_size,n)
         # need to broadcast `advantages` to match the shape of `ratios`
         advantages = advantages.unsqueeze(-1).expand_as(ratios)  # Shape: (batch_size, n)
         
         surr1 = ratios * advantages  # Shape: (batch_size, n)
         surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size, n)
-        tokan_loss = -torch.min(surr1, surr2)[ratios!=float("inf")].mean()  # Shape: scalar
+        tokan_loss = -torch.min(surr1, surr2).mean()  # Shape: scalar
         if not torch.isnan(tokan_loss):
             actor_loss+=tokan_loss
 
@@ -591,13 +592,17 @@ class PPOTrainer:
                 actor_loss, value_loss, a_entropy_loss, t_entropy_loss = self.ppo_loss(batch_old_log_probs, action_dist, batch_actions, batch_token_logp, token_dist, batch_tokens, batch_advantages, batch_returns, state_values)  # Shape: scalar
                 if -a_entropy_loss>0.9:
                     self.entropy_coef/=1.05
-                    self.entropy_coef = max(self.min_entr, self.entropy_coef)
                 else:
                     self.entropy_coef*=1.05
-                    self.entropy_coef = min(self.max_entr, self.entropy_coef)
+                if -t_entropy_loss>1.5:
+                    self.token_entropy_coef/=1.05
+                else:
+                    self.token_entropy_coef*=1.05
+                self.entropy_coef = torch.clamp(self.entropy_coef, self.min_entr, self.max_entr)
+                self.token_entropy_coef = torch.clamp(self.token_entropy_coef, self.min_entr, self.max_entr)
                     
                 self.optimizer.zero_grad()
-                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss
+                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss+self.token_entropy_coef*t_entropy_loss
                 loss.backward()
                 if step%self.grad_step==0:
                     torch.nn.utils.clip_grad_norm_(chain(*[self.optimizer.param_groups[param_i]['params'] for param_i in [0,1,2]]), 1.0)

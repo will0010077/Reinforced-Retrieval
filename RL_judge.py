@@ -107,7 +107,7 @@ if __name__=="__main__":
     data_path='data/cleandata.jsonl'
     dataset=NQADataset(data_path=data_path)
     
-    env_bs = 16
+    env_bs = 64
     env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 15).to(torch.bfloat16)
     # agent.load_state_dict(torch.load("./save/Agent.pt"))
@@ -143,7 +143,7 @@ if __name__=="__main__":
                 token_logits, action_logits, state_value = agent(state)  # token_logits:(B, num, vocab), action_logits shape: (B, action_space_size), state_value shape: (B,)
             token_logits, action_logits, state_value = token_logits.cpu(), action_logits.cpu(), state_value.cpu()
             
-            token_dist = Categorical(logits = token_logits/0.5)
+            token_dist = Categorical(logits = token_logits)
             action_dist = Categorical(logits = action_logits)
             tokens = token_dist.sample()  # Shape:(B,n)
             action = action_dist.sample()  # Shape: (B,)
@@ -157,8 +157,8 @@ if __name__=="__main__":
             # print("".join([str(a.item()) for a in action]), end='', flush=True)
             next_state, reward, done, _ = env.step(action, agent.tokenizer.batch_decode(tokens))  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             token_logp = token_dist.log_prob(tokens)#(B,n)
-            # for i in filter(lambda x:action[x]!=0, range(len(token_logp))):
-            #     token_logp[i]=float("-inf")
+            for i in filter(lambda x:action[x]!=0, range(len(token_logp))):
+                token_logp[i]=float("-inf")
             action_logp = action_dist.log_prob(action)
             for i in range(env_bs):
                 trajectory[i].append([state[i], action[i], action_logp[i], tokens[i], token_logp[i], reward[i], done[i], state_value[i]])  # Shapes: (string, (1,), (1),(15), (15) scalar, scalar (boolean), (1, 1))
