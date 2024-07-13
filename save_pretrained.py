@@ -1,10 +1,10 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModel, RobertaModel
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModel, RobertaModel, RobertaForMaskedLM
 import torch
 
 tokenizer = AutoTokenizer.from_pretrained("roberta-base")
-tokenizer.save_pretrained("huggingface/roberta/")
-model = RobertaModel.from_pretrained("roberta-base")
-model.save_pretrained("huggingface/roberta/")
+tokenizer.save_pretrained("huggingface/roberta_head/")
+model = RobertaForMaskedLM.from_pretrained("roberta-base")
+model.save_pretrained("huggingface/roberta_head/")
 
 # tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 # tokenizer.save_pretrained("huggingface/bert/")

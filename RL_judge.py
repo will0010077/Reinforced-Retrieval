@@ -107,9 +107,9 @@ if __name__=="__main__":
     data_path='data/cleandata.jsonl'
     dataset=NQADataset(data_path=data_path)
     
-    env_bs = 64
+    env_bs = 16
     env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
-    agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
+    agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 15).to(torch.bfloat16)
     # agent.load_state_dict(torch.load("./save/Agent.pt"))
     agent.to(device)
     
@@ -140,26 +140,34 @@ if __name__=="__main__":
                 done[i]=False
         while not any(done):
             with torch.no_grad():
-                action_logits, state_value = agent(state)  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
-            action_logits, state_value = action_logits.cpu(), state_value.cpu()
-            dist = Categorical(logits = action_logits)
+                token_logits, action_logits, state_value = agent(state)  # token_logits:(B, num, vocab), action_logits shape: (B, action_space_size), state_value shape: (B,)
+            token_logits, action_logits, state_value = token_logits.cpu(), action_logits.cpu(), state_value.cpu()
+            
+            token_dist = Categorical(logits = token_logits/0.5)
+            action_dist = Categorical(logits = action_logits)
+            tokens = token_dist.sample()  # Shape:(B,n)
+            action = action_dist.sample()  # Shape: (B,)
             if torch.rand([1])<0.05 or episode<1000:
                 action = torch.randint(env.action_space_size, [env_bs])
             else:
-                action = dist.sample()  # Shape: (1,)
+                action = action_dist.sample()  # Shape: (B,)
             
             # if episode%20==0:
             #     action = torch.tensor(env.steps%3)
             # print("".join([str(a.item()) for a in action]), end='', flush=True)
-            next_state, reward, done, _ = env.step(action)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+            next_state, reward, done, _ = env.step(action, agent.tokenizer.batch_decode(tokens))  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+            token_logp = token_dist.log_prob(tokens)#(B,n)
+            # for i in filter(lambda x:action[x]!=0, range(len(token_logp))):
+            #     token_logp[i]=float("-inf")
+            action_logp = action_dist.log_prob(action)
             for i in range(env_bs):
-                trajectory[i].append([state[i], action[i], dist.log_prob(action)[i], reward[i], done[i], state_value[i]])  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
+                trajectory[i].append([state[i], action[i], action_logp[i], tokens[i], token_logp[i], reward[i], done[i], state_value[i]])  # Shapes: (string, (1,), (1),(15), (15) scalar, scalar (boolean), (1, 1))
             state = next_state
         # modify memory with revise reward that consider future
         for i in range(env_bs):
             if done[i]:
                 for j in range(env.steps[i]):
-                    trajectory[i][j][3] = env.revise_reward[i][j]
+                    trajectory[i][j][5] = env.revise_reward[i][j]
                 memory.extend(trajectory[i])
                 trajectory[i]=[]
                 ma_reward = 0.95*ma_reward + 0.05*sum(env.revise_reward[i])

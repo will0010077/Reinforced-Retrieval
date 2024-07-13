@@ -15,7 +15,7 @@ from metric.reward import BLEU_score, Bert_score
 import random
 import config
 import torch.optim as optim
-from transformers import BertModel, BertConfig, BertTokenizer, RobertaModel, RobertaTokenizer
+from transformers import BertModel, BertConfig, BertTokenizer, RobertaModel, RobertaTokenizer, RobertaForMaskedLM
 from torch.distributions import Categorical
 from config import agent_size_config
 from tqdm import tqdm
@@ -82,12 +82,11 @@ class LLMEnv_batch_version:
         state = self.collate.state_templete(
             self.x[idx],
             self.cat_response(self.response_cache[idx][-self.history_len:]),
-            self.d_t[idx][::2],
             self.action_history[idx][-self.history_len:]
         )
         return state
 
-    def step(self, actions:Tensor):
+    def step(self, actions:Tensor, querys:Tensor):
         rewards = [0] * self.batch_size
         next_states = []
 
@@ -118,7 +117,7 @@ class LLMEnv_batch_version:
         # Process Retrieve Document actions
         
         if len(retrieve_indices)>0:
-            q_t = [self.construct_query(i) for i in retrieve_indices]
+            q_t = [querys[i] for i in retrieve_indices]
             d_t, zt = self.ret.retrieve(q_t, k=1, num_search=4)
             d_t = d_t.squeeze(1)
             for idx,i in enumerate(retrieve_indices):
@@ -420,26 +419,69 @@ class LLMEnv_test(LLMEnv):
         response = self.LM.generate(messages+" "+answer, Doc_tokens = d_t, max_new_tokens=15, decode = False)
         
         return response
+    
 class BertAgentCritic(nn.Module):
-    def __init__(self, model_config, action_space_size):
+    def __init__(self, model_config, action_space_size, token_number):
         super(BertAgentCritic, self).__init__()
-        self.bert = RobertaModel.from_pretrained(config.roberta_dir, torch_dtype = torch.bfloat16).to(torch.bfloat16)
+        self.bert = RobertaForMaskedLM.from_pretrained(config.roberta_dir, torch_dtype=torch.bfloat16).to(torch.bfloat16)
         self.tokenizer = RobertaTokenizer.from_pretrained(config.roberta_dir)
         self.action_head = nn.Linear(self.bert.config.hidden_size, action_space_size)
         self.value_head = nn.Linear(self.bert.config.hidden_size, 1)
         self.action_space_size = action_space_size
-    
-    def forward(self, state = None, inputs = None):
-        if inputs==None:
-            inputs = self.tokenizer(state, return_tensors="pt", padding=True, truncation=True).to(self.bert.device)
-        # inputs['input_ids'] shape: (batch_size, sequence_length)
-        # inputs['attention_mask'] shape: (batch_size, sequence_length)
-        outputs = self.bert(**inputs)
-        # outputs.last_hidden_state shape: (batch_size, sequence_length, hidden_size)
-        cls_output = outputs.last_hidden_state[:, 0, :]  # Shape: (batch_size, hidden_size)
-        action_logits = self.action_head(cls_output).float()  # Shape: (batch_size, action_space_size)
-        state_value = self.value_head(cls_output)[...,0].float()  # Shape: (batch_size,)
-        return action_logits, state_value  # Shapes: (batch_size, action_space_size), (batch_size,)
+        self.token_number = token_number
+        self.max_token_length = 514
+        self.prompt_text = "These are keywords for summary: "
+        # Add special tokens to the tokenizer
+        special_tokens_dict = {'additional_special_tokens': ['[actor_head]', '[value_head]']}
+        self.tokenizer.add_special_tokens(special_tokens_dict)
+        self.bert.resize_token_embeddings(len(self.tokenizer))
+        self.special_tokens = self.tokenizer.convert_tokens_to_ids(['[actor_head]', '[value_head]'])
+        self.special_tokens = torch.tensor(self.special_tokens).unsqueeze(0)
+        
+        self.prompt_inputs = self.tokenizer(self.prompt_text, return_tensors="pt", add_special_tokens =False)
+        self.prompt_len = self.prompt_inputs['input_ids'].size(1)
+
+    def forward(self, state=None, inputs=None):
+        if inputs is None:
+        # Tokenize the state and the prompt text
+            state_inputs = self.tokenizer(state, return_tensors="pt", padding=True, truncation=True).to(self.bert.device)
+            
+            # Combine the prompt text and state input ids and attention masks
+            inputs = {
+                'input_ids': state_inputs['input_ids'],
+                'attention_mask': state_inputs['attention_mask']
+            }
+        
+        batch_size = inputs['input_ids'].size(0)
+        mask_token_id = self.tokenizer.mask_token_id
+        
+        mask_tokens = torch.full((batch_size, self.token_number), mask_token_id, device = self.bert.device)
+        
+        # Calculate the total length with the mask tokens, special tokens, and prompt text
+        total_length = self.prompt_len + self.token_number + 2 + inputs['input_ids'].size(1)
+        
+        # If total length exceeds max_token_length, truncate the input sequence
+        if total_length > self.max_token_length:
+            truncate_length = total_length - self.max_token_length
+            inputs['input_ids'] = inputs['input_ids'][:, :-truncate_length]
+            inputs['attention_mask'] = inputs['attention_mask'][:, :-truncate_length]
+        
+        # Concatenate prompt text, mask tokens, and special tokens with the input sequence
+        inputs['input_ids'] = torch.cat([self.prompt_inputs['input_ids'].to(self.bert.device).repeat(batch_size, 1), mask_tokens, self.special_tokens.to(self.bert.device).repeat(batch_size, 1), inputs['input_ids']], dim=1)
+        inputs['attention_mask'] = torch.cat([torch.ones((batch_size,  self.prompt_len+ self.token_number + 2), dtype=torch.long).to(self.bert.device), inputs['attention_mask']], dim=1)
+        
+        outputs = self.bert(**inputs, output_hidden_states = True)
+        
+        token_logits = outputs.logits[:, self.prompt_len:self.prompt_len+self.token_number, :].float()  # Shape: (batch_size, token_number, V)
+        
+        # Handle special tokens for action and value heads
+        actor_head_output = outputs.hidden_states[-1][:, self.prompt_len+self.token_number, :]  # Shape: (batch_size, hidden_size)
+        value_head_output = outputs.hidden_states[-1][:, self.prompt_len+self.token_number + 1, :]  # Shape: (batch_size, hidden_size)
+        
+        action_logits_special = self.action_head(actor_head_output).float()  # Shape: (batch_size, action_space_size)
+        state_value_special = self.value_head(value_head_output)[..., 0].float()  # Shape: (batch_size,)
+
+        return token_logits, action_logits_special, state_value_special
 
 class PPOTrainer:
     def __init__(self, model:BertAgentCritic, optimizer:torch.optim.Optimizer, gamma=0.99, clip_epsilon=0.2, lambd=0.95, update_epochs=4, batch_size=32, grad_step = 4):
@@ -459,22 +501,38 @@ class PPOTrainer:
         self.min_entr = 2**-10
         self.entropy_coef=2**-7
 
-    def ppo_loss(self, old_log_probs, dist:Categorical, batch_actions, advantages, returns, values):
+    def ppo_loss(self, action_logp, action_dist:Categorical, batch_actions, token_logp, token_dist:Categorical, batch_tokens, advantages, returns, values):
         # old_log_probs shape: (batch_size,)
         # batch_action shape: (batch_size,)
         # advantages shape: (batch_size,)
         # returns shape: (batch_size,)
         # values shape: (batch_size,)
-        new_log_probs = dist.log_prob(batch_actions)
-        ratios = torch.exp(new_log_probs - old_log_probs)  # Shape: (batch_size,)
+        new_action_logp = action_dist.log_prob(batch_actions)
+        ratios = torch.exp(new_action_logp - action_logp)  # Shape: (batch_size,)
+        
+        # need to broadcast `advantages` to match the shape of `ratios`
+        
         surr1 = ratios * advantages  # Shape: (batch_size,)
         surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size,)
         actor_loss = -torch.min(surr1, surr2).mean()  # Shape: scalar
+        
+        # token action
+        new_token_logp = token_dist.log_prob(batch_tokens)
+        ratios = torch.exp(new_token_logp - token_logp)  # Shape: (batch_size,n)
+        # need to broadcast `advantages` to match the shape of `ratios`
+        advantages = advantages.unsqueeze(-1).expand_as(ratios)  # Shape: (batch_size, n)
+        
+        surr1 = ratios * advantages  # Shape: (batch_size, n)
+        surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size, n)
+        tokan_loss = -torch.min(surr1, surr2)[ratios!=float("inf")].mean()  # Shape: scalar
+        if not torch.isnan(tokan_loss):
+            actor_loss+=tokan_loss
 
         critic_loss = F.huber_loss(values, returns, "mean", 1.0)  # Shape: scalar
-        entropy:Tensor = dist.entropy().mean() #scalar
+        action_entropy:Tensor = action_dist.entropy().mean() #scalar
+        token_entropy =  token_dist.entropy().mean()
         
-        return actor_loss, critic_loss, - entropy  # Shape: scalar
+        return actor_loss, critic_loss, - action_entropy, - token_entropy  # Shape: scalar
 
     def compute_gae(self, rewards, values, dones, next_value):
         # rewards shape: (sequence_length,)
@@ -491,40 +549,47 @@ class PPOTrainer:
             returns.insert(0, gae + values[step])  # Shape: scalar
         return returns  # Shape: (sequence_length,)
     def f(self,batch):
-        batch_states, batch_actions, batch_old_log_probs, batch_returns, batch_advantages = zip(*batch)
+        batch_states, batch_actions, batch_old_log_probs, batch_tokens, batch_token_logp, batch_returns, batch_advantages = zip(*batch)
         batch_token = self.model.tokenizer(batch_states, return_tensors = "pt", padding = True, truncation=True)
         batch_actions = torch.stack(batch_actions)
         batch_old_log_probs = torch.stack(batch_old_log_probs)
+        batch_tokens = torch.stack(batch_tokens)
+        batch_token_logp = torch.stack(batch_token_logp)
         batch_returns = torch.stack(batch_returns)
         batch_advantages = torch.stack(batch_advantages)
-        return batch_token, batch_actions, batch_old_log_probs, batch_returns, batch_advantages
+        return batch_token, batch_actions, batch_old_log_probs, batch_tokens, batch_token_logp, batch_returns, batch_advantages
     def update(self, memory):
-        old_states, old_actions, old_log_probs, rewards, dones, values = zip(*memory)
+        old_states, old_actions, old_log_probs, tokens, token_logp, rewards, dones, values = zip(*memory)
         returns = self.compute_gae(rewards, values, dones, next_value=0)
 
         old_states = old_states # Shape: (memory_size, state_size)
         old_actions = torch.tensor(old_actions, dtype=torch.long)  # Shape: (memory_size,)
         old_log_probs = torch.tensor(old_log_probs, dtype=torch.float32)  # Shape: (memory_size,)
+        tokens = torch.stack(tokens)  # Shape: (memory_size,n)
+        token_logp = torch.stack(token_logp)  # Shape: (memory_size,n)
         returns = torch.tensor(returns, dtype=torch.float32)  # Shape: (memory_size,)
         values = torch.tensor(values, dtype=torch.float32)  # Shape: (memory_size,)
         advantages = returns - values  # Shape: (memory_size,)
-        loader = DataLoader([*zip(old_states, old_actions, old_log_probs, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True, drop_last=True)
+        loader = DataLoader([*zip(old_states, old_actions, old_log_probs, tokens, token_logp, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True, drop_last=True)
         step = 0
         bar = tqdm(total=self.update_epochs*len(loader), ncols=0)
         for _ in range(self.update_epochs):
-            for batch_token, batch_actions, batch_old_log_probs, batch_returns, batch_advantages in loader:
+            for batch_token, batch_actions, batch_old_log_probs, batch_tokens, batch_token_logp, batch_returns, batch_advantages in loader:
                 step+=1
                 batch_token = batch_token.to(self.model.bert.device)  # Shape: (batch_size, n)
                 batch_actions = batch_actions.to(self.model.bert.device)  # Shape: (batch_size,)
                 batch_old_log_probs = batch_old_log_probs.to(self.model.bert.device)  # Shape: (batch_size,)
+                batch_tokens = batch_tokens.to(self.model.bert.device)  # Shape: (batch_size,n)
+                batch_token_logp = batch_token_logp.to(self.model.bert.device)  # Shape: (batch_size,n)
                 batch_returns = batch_returns.to(self.model.bert.device)  # Shape: (batch_size,)
                 batch_advantages = batch_advantages.to(self.model.bert.device)  # Shape: (batch_size,)
 
-                logits, state_values = self.model.forward(inputs = batch_token)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
-                dist = Categorical(logits=logits)  # Shape: (batch_size,)
+                token_logits, action_logits, state_values = self.model.forward(inputs = batch_token)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
+                token_dist = Categorical(logits=token_logits)  # Shape: (batch_size,n)
+                action_dist = Categorical(logits=action_logits)  # Shape: (batch_size,)
 
-                actor_loss, value_loss, entropy_loss = self.ppo_loss(batch_old_log_probs, dist, batch_actions, batch_advantages, batch_returns, state_values)  # Shape: scalar
-                if -entropy_loss>0.9:
+                actor_loss, value_loss, a_entropy_loss, t_entropy_loss = self.ppo_loss(batch_old_log_probs, action_dist, batch_actions, batch_token_logp, token_dist, batch_tokens, batch_advantages, batch_returns, state_values)  # Shape: scalar
+                if -a_entropy_loss>0.9:
                     self.entropy_coef/=1.05
                     self.entropy_coef = max(self.min_entr, self.entropy_coef)
                 else:
@@ -532,12 +597,12 @@ class PPOTrainer:
                     self.entropy_coef = min(self.max_entr, self.entropy_coef)
                     
                 self.optimizer.zero_grad()
-                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*entropy_loss
+                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss
                 loss.backward()
                 if step%self.grad_step==0:
                     torch.nn.utils.clip_grad_norm_(chain(*[self.optimizer.param_groups[param_i]['params'] for param_i in [0,1,2]]), 1.0)
                     self.optimizer.step()
-            bar.set_postfix_str(f"ac: {actor_loss:.3f}, value: {value_loss:.3f}, entropy: {-entropy_loss:.3f}")
+            bar.set_postfix_str(f"ac: {actor_loss:.3f}, value: {value_loss:.3f}, entropy: {-a_entropy_loss:.3f},{-t_entropy_loss:.3f}")
             bar.update(len(loader))
 
 
@@ -556,10 +621,13 @@ if __name__=='__main__':
         memory = []
 
         while not done:
-            action_logits, state_value = model([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
-            action_prob = torch.softmax(action_logits, dim=-1)  # Shape: (1, action_space_size)
-            dist = Categorical(action_prob)
-            action = dist.sample()  # Shape: (1,)
+            token_logits, action_logits, state_value = model([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
+            token_dist = Categorical(logits = token_logits)
+            action_dist = Categorical(logits = action_logits)
+            tokens = token_dist.sample()
+            action = action_dist.sample()  # Shape: (1,)
+            print(model.tokenizer.batch_decode(tokens))
+            exit()
 
             next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))

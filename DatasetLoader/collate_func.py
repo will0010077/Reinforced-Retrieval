@@ -106,6 +106,6 @@ class collate():
         )
         return prompt, answer
     
-    def state_templete(self, q, a, d, action):
+    def state_templete(self, q, a, action):
         sep = self.datatokenizer.sep_token
-        return " ".join(action)+ sep+ q+ sep+ a+ sep+ self.datatokenizer.decode(d)
+        return " ".join(action)+ sep+ q+ sep+ a

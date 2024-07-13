@@ -198,7 +198,7 @@ class LLaMa_reader(torch.nn.Module):
 
         outputs = [outputs[j][len(tokens.input_ids[0]):].cpu() for j in range(len(tokens.input_ids))]
         if decode:
-            outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=False)
+            outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
         # self.chat_history.append([message, output])[:,tokens.input_ids.shape[1]:]
         return outputs
     

@@ -93,6 +93,7 @@ if __name__=="__main__":
     ma_reward=0.
     for episode in range(total):
         state = env.reset(dataset[episode][0])  # Shape: string
+        
         done = False
         reward_list = []
         while not done:
@@ -103,13 +104,14 @@ if __name__=="__main__":
             # action_prob[0, 2]-=0.2
             dist = Categorical(logits = action_logits/0.1)
             action = dist.sample()  # Shape: (1,)
-            print(action.item(), end=': ', flush=True)
+            print(action.item(), end='', flush=True)
             next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             if reward!=reward: # check nan, don't know why
                 break
             reward_list.append(reward)
-            print(env.cat_response(env.response_cache))
+            # print(env.cat_response(env.response_cache))
             state = next_state
+        print(env.x)
         print(env.cat_response(env.response_cache))
         if episode>10:
             exit()
