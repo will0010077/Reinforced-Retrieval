@@ -1,7 +1,7 @@
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizerFast
 from DocBuilder.utils import tensor_retuen_type
 from config import LM_dir, bert_dir
 class collateLM():
@@ -56,7 +56,7 @@ class collateLM():
 class collate():
     def __init__(self, LM_dir = LM_dir, bert_dir = bert_dir):
         
-        self.datatokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
+        self.datatokenizer:PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(bert_dir)
         self.LMtokenizer = AutoTokenizer.from_pretrained(
             LM_dir, use_fast=True, lstrip=False, 
             token='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')

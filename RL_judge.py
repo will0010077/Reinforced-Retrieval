@@ -60,9 +60,9 @@ if __name__=="__main__":
     print(torch.cuda.device_count())
     device='cuda'
     
-    cluster_config=config.cluster_config
-    cluster = cluster_builder(k=cluster_config.k)
-    cluster.load('05_29_14_30')
+    # cluster_config=config.cluster_config
+    # cluster = cluster_builder(k=cluster_config.k)
+    # cluster.load('05_29_14_30')
 
     print('Loading LLM')
     LM = LLaMa_reader(config.LM_dir, device, token = token, from_pretrained=True)
@@ -86,13 +86,14 @@ if __name__=="__main__":
 
     print('Initilize retriever')
     lex_MAE_retriver=lex_retriever()
-    lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever904.pt', map_location='cpu')['enc_model_state_dict'], assign=True)
-    data=torch.load('data/data_reduced_2000000.pt') ## shape:(N,d)
-    retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
-    retriever.to(device)
-    retriever.model.to(device)
-    retriever.model.device=device
-    del lex_MAE_retriver, data, cluster
+    lex_MAE_retriver.to(device)
+    lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever904.pt', map_location='cpu')['enc_model_state_dict'], assign=False)
+    # data=torch.load('data/data_reduced_2000000.pt') ## shape:(N,d)
+    # retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
+    # retriever.to(device)
+    # retriever.model.to(device)
+    # retriever.model.device=device
+    # del lex_MAE_retriver, data, cluster
     
     
     print("Initialize Agent...")
@@ -104,11 +105,13 @@ if __name__=="__main__":
     num_RL_update = 8
 
     print('Loading dataset...')
-    data_path='data/cleandata.jsonl'
-    dataset=NQADataset(data_path=data_path,  num_samples=None)
+    data_path='data/cleandata_with_doc.jsonl'
+    dataset=NQADataset(data_path=data_path,  num_samples=None, use_doc=True)
     
+    print("Initialize Env...")
     env_bs = 64
-    env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
+    env = LLMEnv_batch_version(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs)
+    print("Initialize Agent...")
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 15).to(torch.bfloat16)
     # agent.load_state_dict(torch.load("./save/Agent.pt"))
     agent.to(device)

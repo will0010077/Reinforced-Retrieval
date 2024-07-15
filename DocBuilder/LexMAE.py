@@ -48,6 +48,9 @@ class lex_encoder(torch.nn.Module):
 
         return logits, hidden_state, b
 
+    @property
+    def device(self):
+        return self.model.device
 
 class lex_decoder(torch.nn.Module):
     def __init__(self):
@@ -87,6 +90,9 @@ class lex_retriever(torch.nn.Module):
         if out_dim is not None:
             self.proj = torch.nn.Linear(768, out_dim)
 
+    @property
+    def device(self):
+        return self.model.device
     def forward(self, x:dict, output_soft:bool=False):
         mask = x.get('attention_mask',None)
         if mask is None:

@@ -42,7 +42,6 @@ def write_segment(f, s2c:Queue, qlock:Lock, flock:Lock, event:Event):
 
 def generate_segments(text, window_size, step)-> torch.Tensor:
 
-    text=re.sub("(<[/a-z0-9A-Z]*>)",'',string=text.strip())
     tokens = tokenizer(text, return_tensors='pt').input_ids[0]
     tokens: torch.Tensor
     segment_list=[]
@@ -167,8 +166,8 @@ class NQADataset(Dataset):
                 if idx == self.num_samples:
                     break
                 line = json.loads(line)
-                # if not self.use_doc:
-                #     del line["document"]
+                if not self.use_doc:
+                    del line["document"]
                 if self.use_long and line["long_answer"]:
                     if len(line["long_answer"])>1000 or len(line["long_answer"])<3:
                         skip+=1
@@ -184,18 +183,20 @@ class NQADataset(Dataset):
 
     def __getitem__(self, idx):
 
-        q=self.data[idx]['question']
+        out = [self.data[idx]['question']]
         if self.use_long:
-            a = self.data[idx]['long_answer']
+            out += [self.data[idx]['long_answer']]
         else:
-            a = self.data[idx]['short_answers']
+            out += [self.data[idx]['short_answers']]
+        if self.use_doc:
+            out += [self.data[idx]['document']]
         #dict_keys(['document_text', 'long_answer_candidates', 'question_text', 'annotations', 'document_url', 'example_id'])
 
         # a=sample['annotations'][0]['long_answer']#sample['long_answer_candidates'][random_number]
 
         # long_answer=' '.join(sample['document_text'].split()[a['start_token']:a['end_token']])
 
-        return q, a#str(sample['question_text']),long_answer#text_without_tags
+        return out#str(sample['question_text']),long_answer#text_without_tags
 
 def text_normal(text):
     if isinstance(text, list):

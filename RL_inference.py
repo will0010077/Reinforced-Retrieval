@@ -79,7 +79,7 @@ if __name__=="__main__":
     num_RL_update = 8
 
     print('Loading dataset...')
-    data_path='data/cleandata.jsonl'
+    data_path='data/cleandata_with_doc.jsonl'
     dataset=NQADataset(data_path=data_path, num_samples=32)
     
     env = LLMEnv_test(dataset, LM, retriever, 3)

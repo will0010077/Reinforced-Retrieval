@@ -7,10 +7,11 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import math
 from DocBuilder.Retriever_k_means import inner
+from DocBuilder.Retriever_k_means import doc_retriever
+from DocBuilder.LexMAE import lex_retriever
 from DocBuilder.utils import sparse_retrieve_rep, tensor_retuen_type
 from DatasetLoader.collate_func import collate
 from LM.llama_reader import EncTunedLM
-from DocBuilder.Retriever_k_means import doc_retriever
 from metric.reward import BLEU_score, Bert_score
 import random
 import config
@@ -22,8 +23,18 @@ from tqdm import tqdm
 from itertools import chain
 
     
+def generate_segments(text:str, window_size, step)-> list[str]:
+
+    text = text.split()
+    segment_list=[]
+
+    for i in range(0, max(len(text)-window_size,1), step):
+        segment_data = text[max(0, min(i, len(text)-window_size)):i+window_size]
+        # print(segment_data.shape)
+        segment_list.append(" ".join(segment_data))
+    return  segment_list
 class LLMEnv_batch_version:
-    def __init__(self, dataset, LM: EncTunedLM, ret: doc_retriever, action_space_size, history_len=6, batch_size=8):
+    def __init__(self, dataset, LM: EncTunedLM, ret: lex_retriever, action_space_size, history_len=6, batch_size=8):
         self.dataset = dataset  # List of tuples (x, y)
         self.action_space_size = action_space_size
         self.history_len = history_len
@@ -35,6 +46,11 @@ class LLMEnv_batch_version:
         self.batch_size = batch_size  # Set batch size as length of dataset
         self.x = [None] * self.batch_size
         self.y = [None] * self.batch_size
+        self.document = [None] * self.batch_size
+        self.input_ids = [None] * self.batch_size
+        self.attention_mask = [None] * self.batch_size
+        self.embedding = [None] * self.batch_size
+        
         self.d_t = [None] * self.batch_size
         self.basic_reward = [None] * self.batch_size
         self.log_prob = [None] * self.batch_size
@@ -57,15 +73,32 @@ class LLMEnv_batch_version:
         else:
             self._reset_idx(idx)
             return self.get_state(idx)
-
+    @torch.no_grad()
+    def _build_embedding(self, idx):
+        self.document[idx] = generate_segments(self.document[idx],96,64)
+        tokens = self.collate.datatokenizer(self.document[idx], padding = True, return_tensors="pt", add_special_tokens=False).to(self.ret.device)
+        self.input_ids[idx] = tokens.input_ids
+        self.attention_mask[idx] = tokens.attention_mask
+        self.embedding[idx] = self.ret.forward(tokens)#(N,d)
+    @torch.no_grad()
+    def retrieve(self, ids:list, x:list[str]):
+        query = self.ret.tokenizer(x, return_tensors="pt", padding=True).to(self.ret.device)
+        query = self.ret.forward(query)#(b,d)
+        retrieved = []
+        for idx, q in zip(ids, query):
+            topk = torch.topk(q[None] @ self.embedding[idx].T, k=1).indices[0,0]#(1,1)->()
+            retrieved.append(self.input_ids[idx][topk][:sum(self.attention_mask[idx][topk])])
+        return retrieved
+        
     def _reset_idx(self, idx):
         self.current_data = self.dataset[random.randrange(len(self.dataset))]
-        self.x[idx], self.y[idx] = self.current_data
+        self.x[idx], self.y[idx], self.document[idx] = self.current_data
+        self._build_embedding(idx)
         self.y[idx] = self.y[idx].split(' ')
         chunk_size = 10
         self.y[idx] = [' '.join(self.y[idx][i:i + chunk_size]) for i in range(0, len(self.y[idx]), chunk_size)]
-        self.d_t[idx], zt = self.ret.retrieve(self.x[idx], k=1, num_search=4)
-        self.d_t[idx] = self.d_t[idx][0,0]
+        self.d_t[idx] = self.retrieve([idx], self.x[idx])
+        self.d_t[idx] = self.d_t[idx][0]
         self.basic_reward[idx] = Bert_score([self.get_basic_response(self.x[idx], " ".join(self.y[idx]), self.d_t[idx])[0]], [" ".join(self.y[idx])])[0]
         self.halulu[idx] = []
         self.revise_reward[idx] = []
@@ -118,9 +151,8 @@ class LLMEnv_batch_version:
         
         if len(retrieve_indices)>0:
             q_t = [querys[i] for i in retrieve_indices]
-            d_t, zt = self.ret.retrieve(q_t, k=1, num_search=4)
-            d_t = d_t.squeeze(1)
-            for idx,i in enumerate(retrieve_indices):
+            d_t= self.retrieve(retrieve_indices,q_t)
+            for idx, i in enumerate(retrieve_indices):
                 self.d_t[i] = d_t[idx]
 
         # Process Proceed and Rewrite actions in a batch
@@ -207,8 +239,10 @@ class LLMEnv_batch_version:
     def get_next_response(self, indices):
         messages = [self.collate.templete(self.x[i], self.cat_response(self.response_cache[i]))[0] for i in indices]
         answers = [self.y[i][self.n[i]] for i in indices]
-        d_t = torch.stack([self.d_t[i] for i in indices])
-        d_t = tensor_retuen_type(input_ids=d_t, attention_mask=torch.ones_like(d_t)).to(self.LM.device)
+        # d_t = torch.stack([self.d_t[i] for i in indices])#need to padding
+        d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
+        d_t = self.ret.tokenizer(d_t, return_tensors="pt", padding=True).to(self.LM.device)
+        # d_t = tensor_retuen_type(input_ids=d_t, attention_mask=torch.ones_like(d_t)).to(self.LM.device)
 
         responses, log_probs = self.LM.pseudo_generate(messages, answers, Doc_tokens=d_t, temperture=0.5, return_prob=True, decode=False)
         return responses, log_probs
@@ -611,7 +645,7 @@ class PPOTrainer:
                 self.token_entropy_coef = torch.clamp(self.token_entropy_coef, self.min_entr, self.max_entr)
                     
                 self.optimizer.zero_grad()
-                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss+self.token_entropy_coef*t_entropy_loss + 0.01*query_norm_loss
+                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss+self.token_entropy_coef*t_entropy_loss + 0.002*query_norm_loss
                 loss.backward()
                 if step%self.grad_step==0:
                     torch.nn.utils.clip_grad_norm_(chain(*[self.optimizer.param_groups[param_i]['params'] for param_i in [0,1,2]]), 1.0)
