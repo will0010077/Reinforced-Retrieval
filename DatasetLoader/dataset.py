@@ -207,26 +207,19 @@ def text_normal(text):
     text = text.strip()
     text=re.sub("(<[^<>]{1,20}>)", '', text)
     text = re.sub(" +", " ", text)
-    replace_word = {" \'s": "\'s",
+    replace_word = {
     "s \' ": "s\' ",
-    " \'m": "\'m",
-    " \'d": "\'d",
-    " \'ll": "\'ll",
-    " n\'t": "n\'t",
-    " \'re": "\'re",
-    " :": ":",
-    " ;": ";",
-    " ,": ",",
-    " .": ".",
-    "( ": "(",
-    " )": ")",
-    " - ": "-",
-    " -- ": "--",
     "`` ": "\"",
     " \'\'": "\"",
     }
     for k,v in replace_word.items():
         text = text.replace(k, v)
+    right = ["\'s", "\'m", "\'d", "\'ll", "\'re", "n\'t", ":", ";", ",", "\.", "\)","\%","\!","\?", "-", "--", "/"]
+    left = ["\(", "-", "--", "/"]
+    right = "( )("+"|".join(right)+")"
+    left = "("+"|".join(left)+")( )"
+    text = re.sub(right, r"\2",text)
+    text = re.sub(left, r"\1",text)
     text = re.sub("\.+", ".", text)
 
     #<Th_colspan="2">
@@ -385,10 +378,11 @@ class cleanDataset(Dataset):
     def __getitem__(self, idx):
 
         sample = self.data[idx]
+        document = str(sample['document_text'])
         #dict_keys(['document_text', 'long_answer_candidates', 'question_text', 'annotations', 'document_url', 'example_id'])
         # print(sample['question_text'])
         a=sample['annotations'][0]['long_answer']#sample['long_answer_candidates'][random_number]
-        splited_doc=sample['document_text'].split()
+        splited_doc=document.split()
         long_answer=' '.join(splited_doc[a['start_token']:a['end_token']])
         short_annotations=sample['annotations'][0]['short_answers']
         if short_annotations==[]:
@@ -402,7 +396,12 @@ class cleanDataset(Dataset):
             answers.append(answer)
         # print(answers)
         # print(len(sample['question_text']))
-        return text_normal([answers, long_answer, str(sample['document_text']), sample['question_text']])
+        # document = document.split("References (edit) Jump up ^")[0]
+        
+        document=re.sub("<H[23]> (References|Notes).*", '', document)
+        answers, long_answer, document, question_text =  text_normal([answers, long_answer, document, sample['question_text']])
+        return answers, long_answer, document, question_text
+    
 
 class DocumentDatasets():
     def __init__(self) -> None:
@@ -450,9 +449,9 @@ def cleandata():
 
     dataset=cleanDataset(data_path=data_path,num_samples=None)
 
-    datasample=[]
+    num_data=0
     total_a_lenth=[]
-    file = open("data/cleandata.jsonl", 'w')
+    file = open("data/cleandata_with_doc.jsonl", 'w')
     for i in tqdm(range(len(dataset))):
         ans, la, d, q=dataset[i]
         if ans:
@@ -464,13 +463,14 @@ def cleandata():
         if ans or la:
             if len(la)>1000:
                 continue
-            json.dump(dict(short_answers=ans,long_answer=la,question=q), file) #document=d,
+            json.dump(dict(question=q, short_answers=ans,long_answer=la, document = d), file)
             file.write('\n')
+            num_data+=1
     file.close()
 
     print(sum(total_a_lenth)/len(total_a_lenth))
     print(max(total_a_lenth))
-    print('total:',len(datasample))#98708
+    print('total:',num_data)#98708
 
 
 

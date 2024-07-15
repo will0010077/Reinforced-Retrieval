@@ -80,10 +80,10 @@ if __name__=="__main__":
 
     print('Loading dataset...')
     data_path='data/cleandata.jsonl'
-    dataset=NQADataset(data_path=data_path)
+    dataset=NQADataset(data_path=data_path, num_samples=32)
     
-    env = LLMEnv_test([*dataset][:64], LM, retriever, 3)
-    agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
+    env = LLMEnv_test(dataset, LM, retriever, 3)
+    agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 15).to(torch.bfloat16)
     agent.to(device)
     agent.load_state_dict(torch.load("./save/Agent.pt", map_location="cpu"))
     
@@ -98,14 +98,16 @@ if __name__=="__main__":
         reward_list = []
         while not done:
             with torch.no_grad():
-                action_logits, state_value = agent([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
-            action_logits, state_value = action_logits.cpu(), state_value.cpu()
-            # action_prob[0, 1]+=0.2
-            # action_prob[0, 2]-=0.2
-            dist = Categorical(logits = action_logits/0.1)
-            action = dist.sample()  # Shape: (1,)
+                token_logits, action_logits, state_value = agent(state)  # token_logits:(B, num, vocab), action_logits shape: (B, action_space_size), state_value shape: (B,)
+            token_logits, action_logits, state_value = token_logits.cpu(), action_logits.cpu(), state_value.cpu()
+            
+            token_dist = Categorical(logits = token_logits)
+            action_dist = Categorical(logits = action_logits)
+            tokens = token_dist.sample()  # Shape:(B,n)
+            action = action_dist.sample()  # Shape: (B,)
             print(action.item(), end='', flush=True)
-            next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+            querys = agent.tokenizer.batch_decode(tokens)
+            next_state, reward, done, _ = env.step(action, querys)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             if reward!=reward: # check nan, don't know why
                 break
             reward_list.append(reward)

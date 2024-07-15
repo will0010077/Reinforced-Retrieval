@@ -254,7 +254,7 @@ class LLMEnv:
         return self.get_state()
 
     def get_state(self)->str:
-        state = self.collate.state_templete(self.x, self.cat_response(self.response_cache[-self.history_len:]), self.d_t[0,::2], self.action_history)
+        state = self.collate.state_templete(self.x, self.cat_response(self.response_cache[-self.history_len:]), self.action_history)
         return state
 
     def step(self, action):
@@ -378,15 +378,14 @@ class LLMEnv_test(LLMEnv):
         self.action_history = []
         return self.get_state()
     
-    def step(self, action):
+    def step(self, action, querys):
         reward = 0
         if action ==0 and self.last_action==0:
             action = 1
         if action == 0:  # Retrieve Document
             self.action_history.append("retrieve")
             if self.last_action!=0:
-                q_t = self.construct_query()
-                self.d_t, zt = self.ret.retrieve(q_t, k=1, num_search=4)
+                self.d_t, zt = self.ret.retrieve(querys, k=1, num_search=4)
                 self.d_t = self.d_t.squeeze(1)
                 self.hat_y_t = self.hat_y_t  # Keep current response
         elif action == 1:  # Proceed Response

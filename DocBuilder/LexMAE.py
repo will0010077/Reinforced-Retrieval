@@ -3,6 +3,7 @@ sys.path.append("..")
 # Load model directly
 from DocBuilder.Retriever_k_means import cluster_builder
 from DocBuilder.utils import top_k_sparse, generate_mask, sparse_retrieve_rep, max_pooling, cos_sim
+from DocBuilder.utils import tensor_retuen_type
 import torch
 from torch import Tensor
 import torch.nn.functional as F
@@ -114,7 +115,7 @@ class lex_retriever(torch.nn.Module):
 
         dataloader = DataLoader(ids, batch_size=bs, shuffle=False, collate_fn=self.collate, num_workers=8)
         for i,idx in (bar:=tqdm(enumerate(dataloader),ncols=0,total=len(dataloader))):
-            idx['input_ids'] = idx['input_ids'].to('cuda')
+            idx = idx.to('cuda')
             feature  = self.forward(x = idx)#(bs, d)
 
             # sparse_feature = [top_k_sparse(v, 128).cpu() for v in feature]
@@ -123,8 +124,7 @@ class lex_retriever(torch.nn.Module):
             feature_list.append(sparse_feature.cpu()) # (len, bs, d)
         return  torch.cat(feature_list)
     def collate(self, ids):
-        ids = torch.stack(ids)
-        return {'input_ids':ids}
+        return tensor_retuen_type(input_ids = ids)
 
 if __name__=='__main__':
     enc=lex_encoder()

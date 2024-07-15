@@ -1,5 +1,5 @@
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] ="1"
+os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 
 import sys
@@ -105,7 +105,7 @@ if __name__=="__main__":
 
     print('Loading dataset...')
     data_path='data/cleandata.jsonl'
-    dataset=NQADataset(data_path=data_path,  num_samples=32)
+    dataset=NQADataset(data_path=data_path,  num_samples=None)
     
     env_bs = 64
     env = LLMEnv_batch_version(dataset, LM, retriever, 3, batch_size=env_bs)
