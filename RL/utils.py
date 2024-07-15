@@ -75,8 +75,8 @@ class LLMEnv_batch_version:
             return self.get_state(idx)
     @torch.no_grad()
     def _build_embedding(self, idx):
-        self.document[idx] = generate_segments(self.document[idx],96,64)
-        tokens = self.collate.datatokenizer(self.document[idx], padding = True, return_tensors="pt", add_special_tokens=False).to(self.ret.device)
+        self.document[idx] = generate_segments(self.document[idx],96,64)[:256]
+        tokens = self.collate.datatokenizer(self.document[idx], padding = True, truncation=True, return_tensors="pt", add_special_tokens=False).to(self.ret.device)
         self.input_ids[idx] = tokens.input_ids
         self.attention_mask[idx] = tokens.attention_mask
         self.embedding[idx] = self.ret.forward(tokens)#(N,d)
