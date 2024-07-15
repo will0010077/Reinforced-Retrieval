@@ -76,7 +76,7 @@ class LLMEnv_batch_version:
     @torch.no_grad()
     def _build_embedding(self, idx):
         self.document[idx] = generate_segments(self.document[idx],96,64)[:256]
-        tokens = self.collate.datatokenizer(self.document[idx], padding = True, truncation=True, return_tensors="pt", add_special_tokens=False).to(self.ret.device)
+        tokens = self.collate.datatokenizer(self.document[idx], padding = True, truncation=True, max_length=256, return_tensors="pt", add_special_tokens=False).to(self.ret.device)
         self.input_ids[idx] = tokens.input_ids
         self.attention_mask[idx] = tokens.attention_mask
         self.embedding[idx] = self.ret.forward(tokens)#(N,d)
@@ -86,7 +86,7 @@ class LLMEnv_batch_version:
         query = self.ret.forward(query)#(b,d)
         retrieved = []
         for idx, q in zip(ids, query):
-            topk = torch.topk(q[None] @ self.embedding[idx].T, k=1).indices[0,0]#(1,1)->()
+            topk = torch.argmax(q[None] @ self.embedding[idx].T, dim=-1)[0]#(1,1)->()
             retrieved.append(self.input_ids[idx][topk][:sum(self.attention_mask[idx][topk])])
         return retrieved
         
@@ -150,8 +150,8 @@ class LLMEnv_batch_version:
         # Process Retrieve Document actions
         
         if len(retrieve_indices)>0:
-            q_t = [querys[i] for i in retrieve_indices]
-            d_t= self.retrieve(retrieve_indices,q_t)
+            q_t = [self.x[i]+", "+querys[i] for i in retrieve_indices]
+            d_t= self.retrieve(retrieve_indices, q_t)
             for idx, i in enumerate(retrieve_indices):
                 self.d_t[i] = d_t[idx]
 
@@ -645,7 +645,7 @@ class PPOTrainer:
                 self.token_entropy_coef = torch.clamp(self.token_entropy_coef, self.min_entr, self.max_entr)
                     
                 self.optimizer.zero_grad()
-                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss+self.token_entropy_coef*t_entropy_loss + 0.002*query_norm_loss
+                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss+self.token_entropy_coef*t_entropy_loss + 0.001*query_norm_loss
                 loss.backward()
                 if step%self.grad_step==0:
                     torch.nn.utils.clip_grad_norm_(chain(*[self.optimizer.param_groups[param_i]['params'] for param_i in [0,1,2]]), 1.0)

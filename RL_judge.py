@@ -112,7 +112,7 @@ if __name__=="__main__":
     env_bs = 64
     env = LLMEnv_batch_version(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs)
     print("Initialize Agent...")
-    agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 15).to(torch.bfloat16)
+    agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 5).to(torch.bfloat16)
     # agent.load_state_dict(torch.load("./save/Agent.pt"))
     agent.to(device)
     
@@ -184,7 +184,7 @@ if __name__=="__main__":
         # print("\nreward: ",ma_reward, end="\n")
         if len(memory)>(1024):
             reward_file.flush()
-            print(querys[0], env.x[0])
+            print(env.x[0], querys[0])
             trainer.update(memory)
             memory = []
         if time()-save_time>30*60:
