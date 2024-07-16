@@ -243,14 +243,14 @@ class LLMEnv_batch_version:
                     elif a==2:
                         count=0
                         for j in reversed(range(i)):
-                            if self.action_history[j]>0:# counting 1 and 2
+                            if self.action_history[idx][j]>0:# counting 1 and 2
                                 count+=1
-                            if self.action_history[j]==1:# until last proceed
+                            if self.action_history[idx][j]==1:# until last proceed
                                 break
                         r = r/len(self.y[idx])/count-0.0005
                         self.revise_reward[idx].append(r)
                         for j in reversed(range(i)):
-                            if self.action_history[j]>0:
+                            if self.action_history[idx][j]>0:
                                 self.revise_reward[idx][j] = r
             
         return rewards
