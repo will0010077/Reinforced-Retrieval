@@ -235,7 +235,7 @@ class LLMEnv_batch_version:
                 #     self.reward[idx] += rewards[idx]
                     
                 # Spread the reward of whole trajectory across previous actions, assign to revised_reward
-                for i, r, a in enumerate(zip(self.reward[idx], self.action_history[idx])):
+                for i, (r, a) in enumerate(zip(self.reward[idx], self.action_history[idx])):
                     if a==0:
                         self.revise_reward[idx][i].append(r/len(self.y[idx]))
                     elif a==1:
