@@ -200,7 +200,7 @@ class LLMEnv_batch_version:
             elif self.actions[idx] == 0:
                 # retrieval score
                 if self.action_history[idx][-1]!=0 and self.action_history[idx].count(0)<len(self.y[idx]):
-                    rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0]
+                    rewards[idx] += Bert_score([self.ret.tokenizer.decode(self.d_t[idx], skip_special_tokens=True)], [" ".join(self.y[idx])])[0]
             elif self.actions[idx] == 1:
                 # rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0]
                 proceed_indices.append(idx)
@@ -241,7 +241,7 @@ class LLMEnv_batch_version:
                     elif a==1:
                         self.revise_reward[idx].append(r/len(self.y[idx]))
                     elif a==2:
-                        count=0
+                        count=1
                         for j in reversed(range(i)):
                             if self.action_history[idx][j]>0:# counting 1 and 2
                                 count+=1
