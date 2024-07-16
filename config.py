@@ -70,7 +70,7 @@ data_config = Config(
 )
 
 generate_config = Config(
-    no_repeat_ngram_size=6,
+    no_repeat_ngram_size=8,
     do_sample=True,
     temperature=1,
     top_p=0.7,
