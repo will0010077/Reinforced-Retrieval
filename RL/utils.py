@@ -237,9 +237,9 @@ class LLMEnv_batch_version:
                 # Spread the reward of whole trajectory across previous actions, assign to revised_reward
                 for i, (r, a) in enumerate(zip(self.reward[idx], self.action_history[idx])):
                     if a==0:
-                        self.revise_reward[idx][i].append(r/len(self.y[idx]))
+                        self.revise_reward[idx].append(r/len(self.y[idx]))
                     elif a==1:
-                        self.revise_reward[idx][i].append(r/len(self.y[idx]))
+                        self.revise_reward[idx].append(r/len(self.y[idx]))
                     elif a==2:
                         count=0
                         for j in reversed(range(i)):
@@ -248,7 +248,7 @@ class LLMEnv_batch_version:
                             if self.action_history[j]==1:# until last proceed
                                 break
                         r = r/len(self.y[idx])/count-0.0005
-                        self.revise_reward[idx][j].append(r)
+                        self.revise_reward[idx].append(r)
                         for j in reversed(range(i)):
                             if self.action_history[j]>0:
                                 self.revise_reward[idx][j] = r
