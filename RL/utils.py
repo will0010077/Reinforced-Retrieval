@@ -44,6 +44,10 @@ class LLMEnv_batch_version:
         self.current_index = 0
         self.collate = collate()
         self.batch_size = batch_size  # Set batch size as length of dataset
+        self.action_verb=["retrieve","proceed","rewrite"]
+        
+        
+        
         self.x = [None] * self.batch_size
         self.y = [None] * self.batch_size
         self.document = [None] * self.batch_size
@@ -55,6 +59,7 @@ class LLMEnv_batch_version:
         self.basic_reward = [None] * self.batch_size
         self.log_prob = [None] * self.batch_size
         self.halulu = [None] * self.batch_size
+        self.reward = [None] * self.batch_size
         self.revise_reward = [None] * self.batch_size
         self.hat_y_t = [None] * self.batch_size
         self.response_cache = [None] * self.batch_size
@@ -62,8 +67,8 @@ class LLMEnv_batch_version:
         self.done = [None] * self.batch_size
         self.steps = [None] * self.batch_size
         self.last_action = [None] * self.batch_size
-        self.last_proceed = [-1] * self.batch_size
         self.action_history = [None] * self.batch_size
+        self.last_proceed = [-1] * self.batch_size
         self.shuffle = shuffle
 
     def reset(self, idx=None):
@@ -105,6 +110,7 @@ class LLMEnv_batch_version:
         self.d_t[idx] = self.retrieve([idx], self.x[idx])[0]
         self.basic_reward[idx] = Bert_score([self.get_basic_response(self.x[idx], " ".join(self.y[idx]), self.d_t[idx])[0]], [" ".join(self.y[idx])])[0]
         self.halulu[idx] = []
+        self.reward[idx] = []
         self.revise_reward[idx] = []
         self.hat_y_t[idx] = None
         self.response_cache[idx] = [self.hat_y_t[idx]]
@@ -114,12 +120,12 @@ class LLMEnv_batch_version:
         self.last_action[idx] = -1
         self.last_proceed[idx] = -1
         self.action_history[idx] = []
-
+        
     def get_state(self, idx) -> str:
         state = self.collate.state_templete(
             self.x[idx],
             self.cat_response(self.response_cache[idx][-self.history_len:]),
-            self.action_history[idx][-self.history_len:]
+            [self.action_verb[i] for i in self.action_history[idx][-self.history_len:]]
         )
         return state
 
@@ -130,11 +136,10 @@ class LLMEnv_batch_version:
         retrieve_indices = []
         proceed_indices = []
         rewrite_indices = []
-        action_verb=["retrieve","proceed","rewrite"]
         self.actions = actions.clone()
         for i, action in enumerate(actions):
             if not self.done[i]:
-                self.action_history[i].append(action_verb[action])
+                self.action_history[i].append(action)
                 if action == 0:  # Retrieve Document
                     if self.last_action[i] != 0:
                         retrieve_indices.append(i)
@@ -169,7 +174,7 @@ class LLMEnv_batch_version:
                 self.response_cache[i].append(self.hat_y_t[i])
 
         for i in range(self.batch_size):
-            if self.steps[i]>3*len(self.y[i])+4:
+            if self.steps[i]>3*len(self.y[i]):
                 self.done[i]=True
         rewards = self.compute_reward()
         for i in range(self.batch_size):
@@ -184,48 +189,69 @@ class LLMEnv_batch_version:
         proceed_indices = []
         rewrite_indices = []
         for idx in range(self.batch_size):
-            if self.actions[idx] == 1:
-            #     # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
-            #     proceed_indices.append(idx)
-                self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
-            if self.actions[idx] == 2:
-                rewards[idx] -= 0.0001
+            if self.done[idx]:
+                if self.n[idx] > -1:
+                    rewards[idx] += 2*Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - 2*self.basic_reward[idx]
+                    rewards[idx] += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
+                    rewards[idx] += 0.1 * sum(self.halulu[idx])
+                    rewards[idx] = float(rewards[idx])
+                    
+                        
+            elif self.actions[idx] == 0:
+                # retrieval score
+                if self.action_history[idx][-1]!=0 and self.action_history[idx].count(0)<len(self.y[idx]):
+                    rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0]
+            elif self.actions[idx] == 1:
+                # rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0]
+                proceed_indices.append(idx)
+                rewards[idx] += 0.5 * self.log_prob[idx].exp().mean() 
+            elif self.actions[idx] == 2:
                 if self.n[idx] > -1:
                     # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
-                    # rewrite_indices.append(idx)
-                    self.halulu[idx].pop(-1)
-                    self.halulu[idx].append(0.5 * self.log_prob[idx].exp().mean() / len(self.y[idx]))
+                    rewrite_indices.append(idx)
+                    rewards[idx] += 0.5 * self.log_prob[idx].exp().mean() 
                 else:
                     rewards[idx] -= 0.05
                     
-            if self.done[idx]:
-                if self.n[idx] > -1:
-                    rewards[idx] += 3*Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - 2*self.basic_reward[idx]
-                    rewards[idx] += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
-                    rewards[idx] += 0.1 * sum(self.halulu[idx])
-                    rewards[idx]=float(rewards[idx])
             
-        # batch_indices = proceed_indices + rewrite_indices
-        # if batch_indices:
-        #     refs = [self.cat_response(self.response_cache[idx][-1:]) for idx in batch_indices]
-        #     cands = [self.y[idx][self.n[idx]] for idx in batch_indices]
-        #     batch_bert =  list(Bert_score(refs, cands))
-        #     for i, idx in enumerate(batch_indices):
-        #         if batch_bert[i]!=batch_bert[i]:
-        #             print("bert NAN!!")
-        #             self.done[idx] = True
-        #             batch_bert[i]=0
-        #         batch_bert[i] /= len(self.y[idx])
-        #         batch_bert[i] /= self.steps[idx] - self.last_proceed[idx]+1
-        #         for j in range(self.last_proceed[idx], self.steps[idx]):
-        #             self.revise_reward[idx][j] = float(batch_bert[i])
-        #         rewards[idx]+=batch_bert[i]
+        batch_indices = proceed_indices + rewrite_indices
+        if batch_indices:
+            cands = [self.cat_response(self.response_cache[idx][-1:]) for idx in batch_indices]
+            refs = [self.y[idx][self.n[idx]] for idx in batch_indices]
+            batch_bert =  list(Bert_score(cands, refs))
+            for i, idx in enumerate(batch_indices):
+                rewards[idx]+=batch_bert[i]
         for idx in range(self.batch_size):
             if rewards[idx]!=rewards[idx]:
                 print("reward NAN!!")
                 self.done[idx] = True
                 rewards[idx]=0
-            self.revise_reward[idx].append(rewards[idx])
+            self.reward[idx].append(rewards[idx])
+            if self.done[idx]:
+                # Spread the final reward across previous actions
+                # Is it good? Or just put it at the final?
+                # rewards[idx] /= (len(self.reward[idx])+1)
+                # for i in self.reward[idx]:
+                #     self.reward[idx] += rewards[idx]
+                    
+                # Spread the reward of whole trajectory across previous actions, assign to revised_reward
+                for i, r, a in enumerate(zip(self.reward[idx], self.action_history[idx])):
+                    if a==0:
+                        self.revise_reward[idx][i].append(r/len(self.y[idx]))
+                    elif a==1:
+                        self.revise_reward[idx][i].append(r/len(self.y[idx]))
+                    elif a==2:
+                        count=0
+                        for j in reversed(range(i)):
+                            if self.action_history[j]>0:# counting 1 and 2
+                                count+=1
+                            if self.action_history[j]==1:# until last proceed
+                                break
+                        r = r/len(self.y[idx])/count-0.0005
+                        self.revise_reward[idx][j].append(r)
+                        for j in reversed(range(i)):
+                            if self.action_history[j]>0:
+                                self.revise_reward[idx][j] = r
             
         return rewards
 

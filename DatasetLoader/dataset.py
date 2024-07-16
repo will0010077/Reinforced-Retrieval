@@ -190,11 +190,6 @@ class NQADataset(Dataset):
             out += [self.data[idx]['short_answers']]
         if self.use_doc:
             out += [self.data[idx]['document']]
-        #dict_keys(['document_text', 'long_answer_candidates', 'question_text', 'annotations', 'document_url', 'example_id'])
-
-        # a=sample['annotations'][0]['long_answer']#sample['long_answer_candidates'][random_number]
-
-        # long_answer=' '.join(sample['document_text'].split()[a['start_token']:a['end_token']])
 
         return out#str(sample['question_text']),long_answer#text_without_tags
 
@@ -379,11 +374,16 @@ class cleanDataset(Dataset):
     def __getitem__(self, idx):
 
         sample = self.data[idx]
-        document = str(sample['document_text'])
+        if 'document_text' in sample:
+            document = str(sample['document_text'])
+            splited_doc=document.split(" ")
+        else:
+            splited_doc = [sample['document_tokens'][i]["token"] for i in range(len(sample['document_tokens']))]
+            document = " ".join(splited_doc)
         #dict_keys(['document_text', 'long_answer_candidates', 'question_text', 'annotations', 'document_url', 'example_id'])
+        # dict_keys(['annotations', 'document_html', 'document_title', 'document_tokens', 'document_url', 'example_id', 'long_answer_candidates', 'question_text', 'question_tokens'])
         # print(sample['question_text'])
         a=sample['annotations'][0]['long_answer']#sample['long_answer_candidates'][random_number]
-        splited_doc=document.split()
         long_answer=' '.join(splited_doc[a['start_token']:a['end_token']])
         short_annotations=sample['annotations'][0]['short_answers']
         if short_annotations==[]:
@@ -447,12 +447,12 @@ class DocumentDatasets():
 
 def cleandata():
     data_path='data/v1.0-simplified_simplified-nq-train.jsonl'
-
+    data_path = 'data/v1.0-simplified_nq-dev-all.jsonl'
     dataset=cleanDataset(data_path=data_path,num_samples=None)
 
     num_data=0
     total_a_lenth=[]
-    file = open("data/cleandata_with_doc.jsonl", 'w')
+    file = open("data/dev_with_doc.jsonl", 'w')
     for i in tqdm(range(len(dataset))):
         ans, la, d, q=dataset[i]
         if ans:
@@ -462,7 +462,7 @@ def cleandata():
                     continue
                 total_a_lenth.append(len(a.split()))
         if ans or la:
-            if len(la)>1000:
+            if len(la)>3000:
                 continue
             json.dump(dict(question=q, short_answers=ans,long_answer=la, document = d), file)
             file.write('\n')

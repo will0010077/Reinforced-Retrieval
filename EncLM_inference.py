@@ -1,4 +1,6 @@
 import sys
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 import torch
 from torch import nn
@@ -16,7 +18,7 @@ from DocBuilder.utils import tensor_retuen_type
 from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
 from DatasetLoader.dataset import NQADataset
-from metric.reward import BLEU_score, Bert_score
+from metric.reward import BLEU_score, Bert_score,ROUGE_score
 
 from tqdm import tqdm
 import yaml
@@ -55,7 +57,6 @@ if __name__=="__main__":
     retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
     retriever.to(device)
     retriever.model.to(device)
-    retriever.model.device=device
     del lex_MAE_retriver, data, cluster
     
     if True:
@@ -64,9 +65,9 @@ if __name__=="__main__":
         LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
     max_epoch = 1
     print('Loading dataset...')
-    data_path = "data/cleandata.jsonl"
+    data_path = "data/cleandata_with_doc.jsonl"
     dataset = NQADataset(data_path=data_path, num_samples=10000)
-    loader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
+    loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
 
     ori_true_bert_list = []
     ori_ret_bert_list = []
@@ -111,10 +112,10 @@ if __name__=="__main__":
         pre_bert_true=Bert_score(output_pre_true, list(a_str))
         pre_bert_ret=Bert_score(output_pre_ret, list(a_str))
 
-        ori_bleu_true=BLEU_score(output_ori_true, list(a_str))
-        ori_bleu_ret=BLEU_score(output_ori_ret, list(a_str))
-        pre_bleu_true=BLEU_score(output_pre_true, list(a_str))
-        pre_bleu_ret=BLEU_score(output_pre_ret, list(a_str))
+        ori_bleu_true=ROUGE_score(output_ori_true, list(a_str))
+        ori_bleu_ret=ROUGE_score(output_ori_ret, list(a_str))
+        pre_bleu_true=ROUGE_score(output_pre_true, list(a_str))
+        pre_bleu_ret=ROUGE_score(output_pre_ret, list(a_str))
 
         ori_true_bert_list+=ori_bert_true
         ori_ret_bert_list+=ori_bert_ret
@@ -136,7 +137,7 @@ f'''Prompt: {message[j]}\nGround truth: {a_str[j]}
 ''' +"="*80+"\n")
         
         # print(LM_output, list(a_str))
-        if i==10:
+        if i==1:
             break
         
         
@@ -145,7 +146,7 @@ f'''Prompt: {message[j]}\nGround truth: {a_str[j]}
     f.write(f"prefix true bert: {sum(pre_true_bert_list)/len(pre_true_bert_list)}\n")
     f.write(f"prefix ret bert: {sum(pre_ret_bert_list)/len(pre_ret_bert_list)}\n")
     
-    f.write(f"Original true bleu: {sum(ori_true_bleu_list)/len(ori_true_bleu_list)}\n")
-    f.write(f"Original ret bleu: {sum(ori_ret_bleu_list)/len(ori_ret_bleu_list)}\n")
-    f.write(f"prefix true bleu: {sum(pre_true_bleu_list)/len(pre_true_bleu_list)}\n")
-    f.write(f"prefix ret bleu: {sum(pre_ret_bleu_list)/len(pre_ret_bleu_list)}\n")
+    f.write(f"Original true ROUGE_score: {sum(ori_true_bleu_list)/len(ori_true_bleu_list)}\n")
+    f.write(f"Original ret ROUGE_score: {sum(ori_ret_bleu_list)/len(ori_ret_bleu_list)}\n")
+    f.write(f"prefix true ROUGE_score: {sum(pre_true_bleu_list)/len(pre_true_bleu_list)}\n")
+    f.write(f"prefix ret ROUGE_score: {sum(pre_ret_bleu_list)/len(pre_ret_bleu_list)}\n")

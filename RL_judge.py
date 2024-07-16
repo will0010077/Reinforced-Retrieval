@@ -1,5 +1,5 @@
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] ="1"
+os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 
 import sys
@@ -187,7 +187,7 @@ if __name__=="__main__":
             print(env.x[0], querys[0])
             trainer.update(memory)
             memory = []
-        if time()-save_time>30*60:
+        if time()-save_time>29.5*60:
             #save Agent weight
             torch.save(agent.state_dict(), "./save/Agent.pt")
             save_time = time()

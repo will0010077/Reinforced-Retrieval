@@ -9,22 +9,21 @@ from bert_score.utils import (bert_cos_score_idf, cache_scibert, get_bert_embedd
                     get_hash, get_idf_dict, get_model, get_tokenizer,
                     lang2model, model2layers, sent_encode)
 from collections import defaultdict
-
+import evaluate
 
 nltk.download('punkt')
-
 
 model_type='bert-base-uncased'
 tokenizer = get_tokenizer(model_type, True)
 num_layers = model2layers[model_type]
 model = get_model(model_type, num_layers, False)
 model.to("cuda")
-def Bert_score(refs: List[str], cands: List[str]) -> tuple[torch.Tensor]:
+def Bert_score(cands: List[str], refs: List[str]) -> tuple[torch.Tensor]:
     """
     Calculate the BERT score for each pair of sentences in a and b.
     
-    :param a: List of generated answers.
-    :param b: List of reference answers.
+    :param cands: List of generated answers.
+    :param refs: List of reference answers.
     :return: List of BERT scores for each pair of answers.
     """
     # P, R, F1 = score(a, b, lang="en", model_type='bert-base-uncased', device = None)
@@ -63,7 +62,11 @@ def BLEU_score(a: List[str], b: List[str]) -> List[float]:
         bleu_scores.append(bleu)
     return bleu_scores
 
-
+def ROUGE_score(pred, ref):
+    rouge = evaluate.load('rouge')
+    results = rouge.compute(predictions=pred, references=ref, use_aggregator=False)
+    return results["rougeL"]
+    #{'rouge1': 1.0, 'rouge2': 1.0, 'rougeL': 1.0, 'rougeLsum': 1.0}
 
 
 class HalluScore:
