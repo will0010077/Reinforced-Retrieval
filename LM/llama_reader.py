@@ -15,7 +15,7 @@ from peft.utils import _freeze_adapter, _get_submodules
 from LM.Knowledge_encoder import KnowEncoder
 from peft.tuners.adaption_prompt.config import AdaptionPromptConfig, TRANSFORMERS_MODEL_CONFIG, prepare_config
 import math
-from config import generate_config
+from config import generate_config, token
 
 sep='</s>'
 eos='</s>'
@@ -104,7 +104,7 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
         return output, None, past_key_value
 
 class LLaMa_reader(torch.nn.Module):
-    def __init__(self, model_dir, device, token, from_pretrained=True, generate_config = generate_config):
+    def __init__(self, model_dir, device, token = token, from_pretrained=True, generate_config = generate_config):
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, lstrip=False, token=token)
         self.tokenizer.model_max_length=2048
@@ -226,9 +226,11 @@ class LLaMa_reader(torch.nn.Module):
         else:
             output = cut_out_token
         if return_prob:
-            log_prob = dist.log_prob(tokens.input_ids.roll(-1))#B,n
-            token_prob = [log_prob[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1].cpu() for i in range(len(messages))]
-            return output, token_prob
+            log_prob_resampled = dist.log_prob(top_token)
+            log_prob_input = dist.log_prob(tokens.input_ids.roll(-1))#B,n
+            token_prob_resampled = [log_prob_resampled[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1].cpu() for i in range(len(messages))]
+            token_prob_input = [log_prob_input[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1].cpu() for i in range(len(messages))]
+            return output, token_prob_input, token_prob_resampled
         return output
         
 

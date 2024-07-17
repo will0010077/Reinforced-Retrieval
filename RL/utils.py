@@ -12,7 +12,7 @@ from DocBuilder.LexMAE import lex_retriever
 from DocBuilder.utils import sparse_retrieve_rep, tensor_retuen_type
 from DatasetLoader.collate_func import collate
 from LM.llama_reader import EncTunedLM
-from metric.reward import BLEU_score, Bert_score
+from metric.reward import BLEU_score, Bert_score,ROUGE_score
 import random
 import config
 import torch.optim as optim
@@ -44,7 +44,7 @@ class LLMEnv_batch_version:
         self.current_index = 0
         self.collate = collate()
         self.batch_size = batch_size  # Set batch size as length of dataset
-        self.action_verb=["retrieve","proceed","rewrite"]
+        self.action_verb=[" retrieve", " proceed", " rewrite"]
         
         
         
@@ -125,7 +125,7 @@ class LLMEnv_batch_version:
         state = self.collate.state_templete(
             self.x[idx],
             self.cat_response(self.response_cache[idx][-self.history_len:]),
-            [self.action_verb[i] for i in self.action_history[idx][-self.history_len:]]
+            [self.action_verb[i] for i in self.action_history[idx]]
         )
         return state
 
@@ -154,6 +154,7 @@ class LLMEnv_batch_version:
                 elif action == 2:  # Rewrite Current Response
                     if self.n[i] > -1:
                         self.response_cache[i].pop()
+                        self.halulu[i].pop()
                         rewrite_indices.append(i)
 
         # Process Retrieve Document actions
@@ -167,10 +168,11 @@ class LLMEnv_batch_version:
         # Process Proceed and Rewrite actions in a batch
         batch_indices = proceed_indices + rewrite_indices
         if batch_indices:
-            responses, probs = self.get_next_response(batch_indices)
+            responses, token_prob_input, token_prob_resampled = self.get_next_response(batch_indices)
             for idx, i in enumerate(batch_indices):
                 self.hat_y_t[i] = responses[idx]
-                self.probs[i] = probs[idx]
+                self.probs[i] = token_prob_input[idx]
+                self.halulu[i].append(token_prob_resampled[idx].exp().mean())
                 self.response_cache[i].append(self.hat_y_t[i])
 
         for i in range(self.batch_size):
@@ -191,28 +193,28 @@ class LLMEnv_batch_version:
         for idx in range(self.batch_size):
             if self.done[idx]:
                 if self.n[idx] > -1:
-                    rewards[idx] += 2*Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] #- 2*self.basic_reward[idx]
+                    rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] #- 2*self.basic_reward[idx]
                     rewards[idx] += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
-                    rewards[idx] += 0.1 * sum(self.halulu[idx])
+                    rewards[idx] += 0.1 * sum(self.halulu[idx])/len(self.y[idx])
                     rewards[idx] = float(rewards[idx])
                     
                         
             elif self.actions[idx] == 0:
                 # retrieval score
                 if self.action_history[idx][-1]!=0 and self.action_history[idx].count(0)<len(self.y[idx]):
-                    rewards[idx] += Bert_score([self.ret.tokenizer.decode(self.d_t[idx], skip_special_tokens=True)], [" ".join(self.y[idx])])[0]
+                    rewards[idx] += 0.2*ROUGE_score([self.ret.tokenizer.decode(self.d_t[idx], skip_special_tokens=True)], [" ".join(self.y[idx])])[0]
             elif self.actions[idx] == 1:
                 # rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0]
                 proceed_indices.append(idx)
-                rewards[idx] += self.probs[idx].exp().mean() 
+                rewards[idx] += 0.2*self.probs[idx].exp().mean() 
                 
             elif self.actions[idx] == 2:
                 if self.n[idx] > -1:
                     # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
                     rewrite_indices.append(idx)
-                    rewards[idx] += self.probs[idx].exp().mean() 
+                    rewards[idx] += 0.2*self.probs[idx].exp().mean() 
                 else:
-                    rewards[idx] -= 0.05
+                    rewards[idx] -= 0.05*len(self.y[idx])
                     
             
         # batch_indices = proceed_indices + rewrite_indices
@@ -278,8 +280,8 @@ class LLMEnv_batch_version:
         d_t = self.ret.tokenizer(d_t, return_tensors="pt", padding=True).to(self.LM.device)
         # d_t = tensor_retuen_type(input_ids=d_t, attention_mask=torch.ones_like(d_t)).to(self.LM.device)
 
-        responses, probs = self.LM.pseudo_generate(messages, answers, Doc_tokens=d_t, temperture=0.5, return_prob=True, decode=False)
-        return responses, probs
+        responses, token_prob_input, token_prob_resampled = self.LM.pseudo_generate(messages, answers, Doc_tokens=d_t, temperture=0.5, return_prob=True, decode=False)
+        return responses, token_prob_input, token_prob_resampled
 
     def get_basic_response(self, x, y, d_t):
         messages, answer = self.collate.templete(x, "")
