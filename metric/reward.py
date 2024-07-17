@@ -43,8 +43,10 @@ def Bert_score(cands: List[str], refs: List[str]) -> tuple[torch.Tensor]:
         device="cuda",
     ).cpu()
     P, R, F1  = all_preds[..., 0], all_preds[..., 1], all_preds[..., 2]  # P, R, F
-    
-    return F1.unbind()
+    score = F1
+    if any(score==0.):
+        raise ValueError
+    return score.unbind()
 
 def BLEU_score(a: List[str], b: List[str]) -> List[float]:
     """

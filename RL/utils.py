@@ -57,7 +57,7 @@ class LLMEnv_batch_version:
         
         self.d_t = [None] * self.batch_size
         self.basic_reward = [None] * self.batch_size
-        self.log_prob = [None] * self.batch_size
+        self.probs = [None] * self.batch_size
         self.halulu = [None] * self.batch_size
         self.reward = [None] * self.batch_size
         self.revise_reward = [None] * self.batch_size
@@ -167,10 +167,10 @@ class LLMEnv_batch_version:
         # Process Proceed and Rewrite actions in a batch
         batch_indices = proceed_indices + rewrite_indices
         if batch_indices:
-            responses, log_probs = self.get_next_response(batch_indices)
+            responses, probs = self.get_next_response(batch_indices)
             for idx, i in enumerate(batch_indices):
                 self.hat_y_t[i] = responses[idx]
-                self.log_prob[i] = log_probs[idx]
+                self.probs[i] = probs[idx]
                 self.response_cache[i].append(self.hat_y_t[i])
 
         for i in range(self.batch_size):
@@ -191,7 +191,7 @@ class LLMEnv_batch_version:
         for idx in range(self.batch_size):
             if self.done[idx]:
                 if self.n[idx] > -1:
-                    rewards[idx] += 2*Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - 2*self.basic_reward[idx]
+                    rewards[idx] += 2*Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] #- 2*self.basic_reward[idx]
                     rewards[idx] += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
                     rewards[idx] += 0.1 * sum(self.halulu[idx])
                     rewards[idx] = float(rewards[idx])
@@ -204,23 +204,24 @@ class LLMEnv_batch_version:
             elif self.actions[idx] == 1:
                 # rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0]
                 proceed_indices.append(idx)
-                rewards[idx] += 0.5 * self.log_prob[idx].exp().mean() 
+                rewards[idx] += self.probs[idx].exp().mean() 
+                
             elif self.actions[idx] == 2:
                 if self.n[idx] > -1:
                     # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
                     rewrite_indices.append(idx)
-                    rewards[idx] += 0.5 * self.log_prob[idx].exp().mean() 
+                    rewards[idx] += self.probs[idx].exp().mean() 
                 else:
                     rewards[idx] -= 0.05
                     
             
-        batch_indices = proceed_indices + rewrite_indices
-        if batch_indices:
-            cands = [self.cat_response(self.response_cache[idx][-1:]) for idx in batch_indices]
-            refs = [self.y[idx][self.n[idx]] for idx in batch_indices]
-            batch_bert =  list(Bert_score(cands, refs))
-            for i, idx in enumerate(batch_indices):
-                rewards[idx]+=batch_bert[i]
+        # batch_indices = proceed_indices + rewrite_indices
+        # if batch_indices:
+        #     cands = [self.cat_response(self.response_cache[idx][-1:]) for idx in batch_indices if self.n[idx]>-1]
+        #     refs = [self.y[idx][self.n[idx]] for idx in batch_indices if self.n[idx]>-1]
+        #     batch_bert =  list(Bert_score(cands, refs))
+        #     for i, idx in enumerate(batch_indices):
+        #         rewards[idx]+=batch_bert[i]
         for idx in range(self.batch_size):
             if rewards[idx]!=rewards[idx]:
                 print("reward NAN!!")
@@ -236,7 +237,9 @@ class LLMEnv_batch_version:
                     
                 # Spread the reward of whole trajectory across previous actions, assign to revised_reward
                 for i, (r, a) in enumerate(zip(self.reward[idx], self.action_history[idx])):
-                    if a==0:
+                    if i==len(self.reward[idx])-1:
+                        self.revise_reward[idx].append(r)
+                    elif a==0:
                         self.revise_reward[idx].append(r/len(self.y[idx]))
                     elif a==1:
                         self.revise_reward[idx].append(r/len(self.y[idx]))
@@ -275,8 +278,8 @@ class LLMEnv_batch_version:
         d_t = self.ret.tokenizer(d_t, return_tensors="pt", padding=True).to(self.LM.device)
         # d_t = tensor_retuen_type(input_ids=d_t, attention_mask=torch.ones_like(d_t)).to(self.LM.device)
 
-        responses, log_probs = self.LM.pseudo_generate(messages, answers, Doc_tokens=d_t, temperture=0.5, return_prob=True, decode=False)
-        return responses, log_probs
+        responses, probs = self.LM.pseudo_generate(messages, answers, Doc_tokens=d_t, temperture=0.5, return_prob=True, decode=False)
+        return responses, probs
 
     def get_basic_response(self, x, y, d_t):
         messages, answer = self.collate.templete(x, "")
@@ -505,6 +508,8 @@ class PPOTrainer:
         token_logp = torch.stack(token_logp)  # Shape: (memory_size,n)
         returns = torch.tensor(returns, dtype=torch.float32)  # Shape: (memory_size,)
         values = torch.tensor(values, dtype=torch.float32)  # Shape: (memory_size,)
+        torch.save(returns, "save/return.pt")
+        torch.save(values, "save/value.pt")
         advantages = returns - values  # Shape: (memory_size,)
         loader = DataLoader([*zip(old_states, old_actions, old_log_probs, tokens, token_logp, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True, drop_last=True)
         step = 0

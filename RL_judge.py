@@ -106,10 +106,10 @@ if __name__=="__main__":
 
     print('Loading dataset...')
     data_path='data/cleandata_with_doc.jsonl'
-    dataset=NQADataset(data_path=data_path,  num_samples=None, use_doc=True)
+    dataset=NQADataset(data_path=data_path,  num_samples=8, use_doc=True)
     
     print("Initialize Env...")
-    env_bs = 64
+    env_bs = 32
     env = LLMEnv_batch_version(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs)
     print("Initialize Agent...")
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 5).to(torch.bfloat16)
@@ -154,6 +154,9 @@ if __name__=="__main__":
                 action = torch.randint(env.action_space_size, [env_bs])
             else:
                 action = action_dist.sample()  # Shape: (B,)
+            for i in range(env_bs): 
+                if env.steps[i]==0:
+                    action[i]=0
             
             # if episode%20==0:
             #     action = torch.tensor(env.steps%3)

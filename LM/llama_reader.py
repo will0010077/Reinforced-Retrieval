@@ -209,7 +209,7 @@ class LLaMa_reader(torch.nn.Module):
             messages = [messages]
         if isinstance(forcing, str):
             forcing = [forcing]
-        cat = [m+" "+f+self.eos for m, f in zip(messages, forcing)]
+        cat = [m+" "+f for m, f in zip(messages, forcing)]
         unlabel = self.tokenizer(text=messages).input_ids
         unlabel_len = [len(m) for m in unlabel]
         # print(max([len(s) for s in unlabel]))
@@ -220,13 +220,13 @@ class LLaMa_reader(torch.nn.Module):
         dist = Categorical(logits=lm_logits/temperture)
         
         top_token = dist.sample()
-        cut_token = [top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1] for i in range(len(messages))]
+        cut_out_token = [top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1] for i in range(len(messages))]
         if decode:
-            output = self.tokenizer.batch_decode(cut_token, skip_special_tokens=False)
+            output = self.tokenizer.batch_decode(cut_out_token, skip_special_tokens=False)
         else:
-            output = cut_token
+            output = cut_out_token
         if return_prob:
-            log_prob = dist.log_prob(top_token)
+            log_prob = dist.log_prob(tokens.input_ids.roll(-1))#B,n
             token_prob = [log_prob[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1].cpu() for i in range(len(messages))]
             return output, token_prob
         return output
