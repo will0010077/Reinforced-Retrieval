@@ -532,7 +532,7 @@ class PPOTrainer:
                 questions_token = questions_token.to(self.model.bert.device)
                 special_tokens_mask = questions_token.special_tokens_mask
                 query_normal = questions_token.input_ids.T.unsqueeze(-1)#(q_len,64,1)
-                query_norm_loss = -(token_dist.log_prob(query_normal)*(1-special_tokens_mask.T.unsqueeze(-1))).mean() #(512,64,n)
+                # query_norm_loss = -(token_dist.log_prob(query_normal)*(1-special_tokens_mask.T.unsqueeze(-1))).mean() #(512,64,n)
                 
                 actor_loss, value_loss, a_entropy_loss, t_entropy_loss = self.ppo_loss(batch_old_log_probs, action_dist, batch_actions, batch_token_logp, token_dist, batch_token_action, batch_advantages, batch_returns, state_values)  # Shape: scalar
                 if -a_entropy_loss>0.9:
@@ -547,7 +547,7 @@ class PPOTrainer:
                 self.token_entropy_coef = torch.clamp(self.token_entropy_coef, self.min_entr, self.max_entr)
                     
                 self.optimizer.zero_grad()
-                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss+self.token_entropy_coef*t_entropy_loss + 0.001*query_norm_loss
+                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss+self.token_entropy_coef*t_entropy_loss# + 0.001*query_norm_loss
                 loss.backward()
                 if step%self.grad_step==0:
                     torch.nn.utils.clip_grad_norm_(chain(*[self.optimizer.param_groups[param_i]['params'] for param_i in [0,1,2]]), 1.0)
