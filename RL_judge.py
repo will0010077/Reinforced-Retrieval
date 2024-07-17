@@ -154,9 +154,6 @@ if __name__=="__main__":
                 action = torch.randint(env.action_space_size, [env_bs])
             else:
                 action = action_dist.sample()  # Shape: (B,)
-            for i in range(env_bs): 
-                if env.steps[i]==0:
-                    action[i]=0
             
             # if episode%20==0:
             #     action = torch.tensor(env.steps%3)

@@ -159,8 +159,8 @@ class LLMEnv_batch_version:
         # Process Retrieve Document actions
         
         if len(retrieve_indices)>0:
-            q_t = [self.x[i]+", "+querys[i] for i in retrieve_indices]
-            d_t= self.retrieve(retrieve_indices, q_t)
+            q_t = [self.construct_query(i) for i in retrieve_indices]
+            d_t = self.retrieve(retrieve_indices, q_t)
             for idx, i in enumerate(retrieve_indices):
                 self.d_t[i] = d_t[idx]
 
@@ -452,17 +452,17 @@ class PPOTrainer:
         surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size,)
         actor_loss = -torch.min(surr1, surr2).mean()  # Shape: scalar
         
-        # token action
-        new_token_logp = token_dist.log_prob(batch_tokens)
-        ratios = (new_token_logp - token_logp).clamp(-3,3).exp()  # Shape: (batch_size,n)
-        # need to broadcast `advantages` to match the shape of `ratios`
-        advantages = advantages.unsqueeze(-1).expand_as(ratios)  # Shape: (batch_size, n)
+        # # token action
+        # new_token_logp = token_dist.log_prob(batch_tokens)
+        # ratios = (new_token_logp - token_logp).clamp(-3,3).exp()  # Shape: (batch_size,n)
+        # # need to broadcast `advantages` to match the shape of `ratios`
+        # advantages = advantages.unsqueeze(-1).expand_as(ratios)  # Shape: (batch_size, n)
         
-        surr1 = ratios * advantages  # Shape: (batch_size, n)
-        surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size, n)
-        tokan_loss = -torch.min(surr1, surr2).mean()  # Shape: scalar
-        if not torch.isnan(tokan_loss):
-            actor_loss+=tokan_loss
+        # surr1 = ratios * advantages  # Shape: (batch_size, n)
+        # surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size, n)
+        # tokan_loss = -torch.min(surr1, surr2).mean()  # Shape: scalar
+        # if not torch.isnan(tokan_loss):
+        #     actor_loss+=tokan_loss
 
         critic_loss = F.huber_loss(values, returns, "mean", 1.0)  # Shape: scalar
         action_entropy:Tensor = action_dist.entropy().mean() #scalar
