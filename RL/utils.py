@@ -58,7 +58,7 @@ class LLMEnv_batch_version:
         self.d_t = [None] * self.batch_size
         self.basic_reward = [None] * self.batch_size
         self.probs = [None] * self.batch_size
-        self.halulu = [None] * self.batch_size
+        self.probs_halulu = [None] * self.batch_size
         self.reward = [None] * self.batch_size
         self.revise_reward = [None] * self.batch_size
         self.hat_y_t = [None] * self.batch_size
@@ -109,7 +109,6 @@ class LLMEnv_batch_version:
         self.y[idx] = [' '.join(self.y[idx][i:i + chunk_size]) for i in range(0, len(self.y[idx]), chunk_size)]
         self.d_t[idx] = self.retrieve([idx], self.x[idx])[0]
         self.basic_reward[idx] = Bert_score([self.get_basic_response(self.x[idx], " ".join(self.y[idx]), self.d_t[idx])[0]], [" ".join(self.y[idx])])[0]
-        self.halulu[idx] = []
         self.reward[idx] = []
         self.revise_reward[idx] = []
         self.hat_y_t[idx] = None
@@ -154,7 +153,6 @@ class LLMEnv_batch_version:
                 elif action == 2:  # Rewrite Current Response
                     if self.n[i] > -1:
                         self.response_cache[i].pop()
-                        self.halulu[i].pop()
                         rewrite_indices.append(i)
 
         # Process Retrieve Document actions
@@ -172,7 +170,7 @@ class LLMEnv_batch_version:
             for idx, i in enumerate(batch_indices):
                 self.hat_y_t[i] = responses[idx]
                 self.probs[i] = token_prob_input[idx]
-                self.halulu[i].append(token_prob_resampled[idx].exp().mean())
+                self.probs_halulu[i] = token_prob_input[idx]
                 self.response_cache[i].append(self.hat_y_t[i])
 
         for i in range(self.batch_size):
@@ -193,9 +191,8 @@ class LLMEnv_batch_version:
         for idx in range(self.batch_size):
             if self.done[idx]:
                 if self.n[idx] > -1:
-                    rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] #- 2*self.basic_reward[idx]
+                    rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - self.basic_reward[idx]
                     rewards[idx] += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
-                    rewards[idx] += 0.1 * sum(self.halulu[idx])/len(self.y[idx])
                     rewards[idx] = float(rewards[idx])
                     
                         
@@ -206,13 +203,15 @@ class LLMEnv_batch_version:
             elif self.actions[idx] == 1:
                 # rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0]
                 proceed_indices.append(idx)
-                rewards[idx] += 0.2*self.probs[idx].exp().mean() 
+                rewards[idx] += 0.2*self.probs[idx].exp().mean()
+                rewards[idx] += 0.05*self.probs_halulu[idx].exp().mean() 
                 
             elif self.actions[idx] == 2:
                 if self.n[idx] > -1:
                     # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
                     rewrite_indices.append(idx)
                     rewards[idx] += 0.2*self.probs[idx].exp().mean() 
+                    rewards[idx] += 0.05*self.probs_halulu[idx].exp().mean() 
                 else:
                     rewards[idx] -= 0.05*len(self.y[idx])
                     
@@ -517,7 +516,7 @@ class PPOTrainer:
         torch.save(returns, "save/return.pt")
         torch.save(values, "save/value.pt")
         advantages = returns - values  # Shape: (memory_size,)
-        advantages = F.normalize(advantages)
+        advantages = F.normalize(advantages, dim=0)
         loader = DataLoader([*zip(old_states, old_actions, old_log_probs, tokens, token_logp, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True, drop_last=True)
         step = 0
         bar = tqdm(total=self.update_epochs*len(loader), ncols=0)
