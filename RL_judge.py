@@ -106,10 +106,10 @@ if __name__=="__main__":
 
     print('Loading dataset...')
     data_path='data/cleandata_with_doc.jsonl'
-    dataset=NQADataset(data_path=data_path,  num_samples=256, use_doc=True)
+    dataset=NQADataset(data_path=data_path,  num_samples=64, use_doc=True)
     
     print("Initialize Env...")
-    env_bs = 32
+    env_bs = 64
     env = LLMEnv_batch_version(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs)
     print("Initialize Agent...")
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 5).to(torch.bfloat16)
@@ -119,9 +119,9 @@ if __name__=="__main__":
     Agent_optim = optim.AdamW([{"params": agent.bert.parameters(), "lr": config.train_config.agent_lr},
                                {"params": agent.value_head.parameters(), "lr": config.train_config.agent_lr*3},
                                {"params": agent.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas = config.train_config.betas, eps=1e-4)
-    trainer = PPOTrainer(agent, Agent_optim, gamma = 1.0, clip_epsilon=0.2, lambd = 0.95, update_epochs=4, batch_size = 64, grad_step = 1)
+    trainer = PPOTrainer(agent, Agent_optim, gamma = 1.0, clip_epsilon=0.2, lambd = 0.95, update_epochs=4, batch_size = 64, grad_step = 2)
     # Training loop
-    total = 500000
+    total = 100000
     reduce = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power = 1.5)
     warmup = optim.lr_scheduler.LinearLR(Agent_optim, 1e-5, 1, total_iters=int(total*0.001))
     scheduler = optim.lr_scheduler.SequentialLR(Agent_optim, [warmup, reduce], milestones=[warmup.total_iters])

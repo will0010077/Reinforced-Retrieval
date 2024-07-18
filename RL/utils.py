@@ -34,7 +34,7 @@ def generate_segments(text:str, window_size, step)-> list[str]:
         segment_list.append(" ".join(segment_data))
     return  segment_list
 class LLMEnv_batch_version:
-    def __init__(self, dataset, LM: EncTunedLM, ret: lex_retriever, action_space_size, history_len=6, batch_size=8, shuffle = True):
+    def __init__(self, dataset, LM: EncTunedLM, ret: lex_retriever, action_space_size, history_len=24, batch_size=8, shuffle = True):
         self.dataset = dataset  # List of tuples (x, y)
         self.action_space_size = action_space_size
         self.history_len = history_len
@@ -280,13 +280,13 @@ class LLMEnv_batch_version:
         d_t = self.ret.tokenizer(d_t, return_tensors="pt", padding=True).to(self.LM.device)
         # d_t = tensor_retuen_type(input_ids=d_t, attention_mask=torch.ones_like(d_t)).to(self.LM.device)
 
-        responses, token_prob_input, token_prob_resampled = self.LM.pseudo_generate(messages, answers, Doc_tokens=d_t, temperture=0.5, return_prob=True, decode=False)
+        responses, token_prob_input, token_prob_resampled = self.LM.pseudo_generate(messages, answers, Doc_tokens=d_t, temperture=0.2, return_prob=True, decode=False)
         return responses, token_prob_input, token_prob_resampled
 
     def get_basic_response(self, x, y, d_t):
         messages, answer = self.collate.templete(x, "")
         d_t = tensor_retuen_type(input_ids=d_t[None], attention_mask=torch.ones_like(d_t[None])).to(self.LM.device)
-        response = self.LM.pseudo_generate(messages, y, Doc_tokens=d_t, temperture=0.5, return_prob=False, decode=True)
+        response = self.LM.pseudo_generate(messages, y, Doc_tokens=d_t, temperture=0.2, return_prob=False, decode=True)
         return response
 
 
@@ -300,11 +300,10 @@ class LLMEnv_test(LLMEnv_batch_version):
         retrieve_indices = []
         proceed_indices = []
         rewrite_indices = []
-        action_verb=["retrieve","proceed","rewrite"]
         self.actions = actions.clone()
         for i, action in enumerate(actions):
             if not self.done[i]:
-                self.action_history[i].append(action_verb[action])
+                self.action_history[i].append(action)
                 if action == 0:  # Retrieve Document
                     if self.last_action[i] != 0:
                         retrieve_indices.append(i)
@@ -321,7 +320,7 @@ class LLMEnv_test(LLMEnv_batch_version):
         # Process Retrieve Document actions
         
         if len(retrieve_indices)>0:
-            q_t = [self.x[i]+", "+querys[i] for i in retrieve_indices]
+            q_t = [self.construct_query(i) for i in retrieve_indices]
             d_t= self.retrieve(retrieve_indices, q_t)
             for idx, i in enumerate(retrieve_indices):
                 self.d_t[i] = d_t[idx]
@@ -359,12 +358,15 @@ class BertAgentCritic(nn.Module):
     def __init__(self, model_config, action_space_size, token_number):
         super(BertAgentCritic, self).__init__()
         self.bert = RobertaForMaskedLM.from_pretrained(config.roberta_dir, torch_dtype=torch.bfloat16).to(torch.bfloat16)
+        embedding = self.bert.roberta.embeddings.position_embeddings
+        embedding = torch.nn.modules.sparse.Embedding(1026, embedding.embedding_dim, embedding.padding_idx, embedding.max_norm, embedding.norm_type, embedding.scale_grad_by_freq, embedding.sparse, dtype = torch.bfloat16)
+        self.bert.roberta.embeddings.position_embeddings = embedding
         self.tokenizer = RobertaTokenizer.from_pretrained(config.roberta_dir)
         self.action_head = nn.Linear(self.bert.config.hidden_size, action_space_size)
         self.value_head = nn.Linear(self.bert.config.hidden_size, 1)
         self.action_space_size = action_space_size
         self.token_number = token_number
-        self.max_token_length = 514
+        self.max_token_length = self.bert.roberta.embeddings.position_embeddings.num_embeddings
         self.prompt_text = "These are keywords for summary: "
         # Add special tokens to the tokenizer
         special_tokens_dict = {'additional_special_tokens': ['[actor_head]', '[value_head]']}
@@ -431,7 +433,7 @@ class PPOTrainer:
         self.grad_step = grad_step
         
         self.action_coef=1
-        self.value_coef=2**-1
+        self.value_coef=2**1
         
         self.max_entr = torch.tensor(2**-6)
         self.min_entr = torch.tensor(2**-10)

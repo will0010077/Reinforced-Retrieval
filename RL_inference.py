@@ -38,7 +38,7 @@ if __name__=="__main__":
 
     print('Loading LLM')
     generate_config = config.generate_config
-    generate_config.temperature=0.3
+    generate_config.temperature=0.2
     LM = LLaMa_reader(LM_dir, device, token = token, from_pretrained=True, generate_config=generate_config)
     dtype = LM.dtype
     num_dims = LM.model.config.hidden_size
@@ -86,7 +86,7 @@ if __name__=="__main__":
 
     print('Loading dataset...')
     data_path='data/dev_with_doc.jsonl'
-    dataset=NQADataset(data_path=data_path, num_samples=256, use_doc=True)
+    dataset=NQADataset(data_path=data_path, num_samples=80, use_doc=True)
     env_bs=8
     env = LLMEnv_test(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs, shuffle=False)
     
@@ -94,7 +94,7 @@ if __name__=="__main__":
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 5).to(torch.bfloat16)
     agent.to(device)
     agent.eval()
-    agent.load_state_dict(torch.load("./save/Agent.pt", map_location="cpu"))
+    agent.load_state_dict(torch.load("save/Agent0718_reward865.pt", map_location="cpu"))
     
     # Training loop
     total = 100000
@@ -107,6 +107,8 @@ if __name__=="__main__":
     a_list=[]
     true_list=[]
     print("Starting reset...")
+    f = open("moniter.txt", "a")
+    
     for i in range(env_bs):
         if done[i]:
             state[i] = env.reset(i)  # Shape: string
@@ -120,7 +122,8 @@ if __name__=="__main__":
                 episode+=1
                 state[i] = env.reset(i)  # Shape: string
                 done[i]=False
-        
+        if len(q_list)>=74:
+            break
         while not any(done):
             with torch.no_grad():
                 token_logits, action_logits, state_value = agent(state)  # token_logits:(B, num, vocab), action_logits shape: (B, action_space_size), state_value shape: (B,)
@@ -136,11 +139,16 @@ if __name__=="__main__":
             next_state, reward, done, _ = env.step(action, querys)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             # print(env.cat_response(env.response_cache))
             state = next_state
-        if env.current_index>90:
-            break
+    q_list, a_list, true_list = q_list[:80], a_list[:80], true_list[:80]
     bert = Bert_score(a_list, true_list )
     rouge = ROUGE_score(a_list, true_list )
-    for i in range(len(q_list)):
-        print(q_list[i], bert[i], rouge[i], "\n",a_list[i],"\n", true_list[i])
-        print("="*80)
-    print("bert score:",np.mean(bert))
+    
+    for j in range(len(q_list)):
+        f.write(
+f'''Prompt: {q_list[j]}\nGround truth: {true_list[j]}
+[{bert[j]:.3f}, {rouge[j]:.3f}] Original true response: {a_list[j]}
+''' +"="*80+"\n")
+        
+        
+    f.write(f"RL bert: {sum(bert)/len(bert)}\n")
+    f.write(f"RL ROUGE_score: {sum(rouge)/len(rouge)}\n")

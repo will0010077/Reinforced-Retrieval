@@ -19,7 +19,7 @@ from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
 from DatasetLoader.dataset import NQADataset
 from metric.reward import BLEU_score, Bert_score,ROUGE_score
-
+from RL.utils import generate_segments
 from tqdm import tqdm
 import yaml
 import peft
@@ -30,6 +30,36 @@ import config
 token = "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"
 model_dir = "meta-llama/Llama-2-7b-chat-hf"
 
+
+class small_retriever:
+    def __init__(self, doc, model:lex_retriever):
+        self.len = len(doc)
+        self.document = [*doc]
+        self.input_ids = [None]*self.len
+        self.attention_mask = [None]*self.len
+        self.embedding = [None]*self.len
+        self.ret = model
+        self.collate=collate()
+        for idx in range(self.len):
+            self._build_embedding(idx)
+    @torch.no_grad()
+    def _build_embedding(self, idx):
+        self.document[idx] = generate_segments(self.document[idx],96,64)[:256]
+        tokens = self.collate.datatokenizer(self.document[idx], padding = True, truncation=True, max_length=256, return_tensors="pt", add_special_tokens=False).to(self.ret.device)
+        self.input_ids[idx] = tokens.input_ids
+        self.attention_mask[idx] = tokens.attention_mask
+        self.embedding[idx] = self.ret.forward(tokens)#(N,d)
+
+    @torch.no_grad()
+    def retrieve(self, ids:list, x:list[str]):
+        query = self.ret.tokenizer(x, return_tensors="pt", padding=True).to(self.ret.device)
+        query = self.ret.forward(query)#(b,d)
+        retrieved = []
+        for idx, q in zip(ids, query):
+            topk = torch.argmax(q[None] @ self.embedding[idx].T, dim=-1)[0]#(1,1)->()
+            retrieved.append(self.input_ids[idx][topk][:sum(self.attention_mask[idx][topk])])
+        return retrieved
+    
 if __name__=="__main__":
     device = 0
     print('Loading LLM')
@@ -45,29 +75,23 @@ if __name__=="__main__":
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
     LM.to(device)
     LM.eval()
-
-    print('Initilize retriever')
-    
-    cluster_config=config.cluster_config
-    cluster = cluster_builder(k=cluster_config.k)
-    cluster.load('05_29_14_30')
-    lex_MAE_retriver=lex_retriever()
-    lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever904.pt', map_location='cpu')['enc_model_state_dict'], assign=True)
-    data=torch.load('data/data_reduced_2000000.pt') ## shape:(N,d)
-    retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
-    retriever.to(device)
-    retriever.model.to(device)
-    del lex_MAE_retriver, data, cluster
-    
     if True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
         LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
+
+    print('Initilize retriever')
+    
+    lex_MAE_retriver=lex_retriever()
+    lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever904.pt', map_location='cpu')['enc_model_state_dict'], assign=True)
+    lex_MAE_retriver.to(device)
+    
+    
     max_epoch = 1
     print('Loading dataset...')
-    data_path = "data/cleandata_with_doc.jsonl"
-    dataset = NQADataset(data_path=data_path, num_samples=10000)
-    loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=1, collate_fn=collate().collate_qa, persistent_workers=True)
+    data_path = "data/dev_with_doc.jsonl"
+    dataset = NQADataset(data_path=data_path, num_samples=80, use_doc=True)
+    loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=1, persistent_workers=True)
 
     ori_true_bert_list = []
     ori_ret_bert_list = []
@@ -79,17 +103,16 @@ if __name__=="__main__":
     pre_true_bleu_list = []
     pre_ret_bleu_list = []
     f = open("moniter.txt", "a")
-    for i,(tokens, unlabel, unlabel_str,  q_str, a_str, a_tokens) in enumerate(loader):
+    for i, (q_str, a_str, doc) in enumerate(loader):
+        q_str, a_str, doc = [*q_str], [*a_str], [*doc]
+        ret = small_retriever(doc, lex_MAE_retriver)
         
-        tokens = tokens.to(device)
-        del tokens['labels']
-        tokens.input_ids = tokens.input_ids[:,:128]
-        tokens.attention_mask = tokens.attention_mask[:,:128]
-        a_tokens = a_tokens.to(device)
-        d_t, z_t = retriever.retrieve(q_str, k=1, num_search=4)
-        d_t = d_t.squeeze(1)
+        
+        d_t = ret.retrieve(range(ret.len), q_str)
+        qa_tokens, unlabel, unlabel_str, q_str, a_str, a_tokens = collate().collate_qa(zip(q_str, a_str))
+        a_tokens = a_tokens.to(LM.device)
         documents = collate().datatokenizer.batch_decode(d_t)
-        d_t = tensor_retuen_type(input_ids = d_t, attention_mask = torch.ones_like(d_t)).to(LM.device)
+        d_t = collate().datatokenizer(documents, return_tensors="pt", padding=True).to(LM.device)
         
         with torch.no_grad():
             message = [unlabel_str[j] for j in range(len(unlabel_str))]
@@ -136,9 +159,6 @@ f'''Prompt: {message[j]}\nGround truth: {a_str[j]}
 [{pre_bert_ret[j]:.3f}, {pre_bleu_ret[j]:.3f}] Prifix ret response: {output_pre_ret[j]}
 ''' +"="*80+"\n")
         
-        # print(LM_output, list(a_str))
-        if i==1:
-            break
         
         
     f.write(f"Original true bert: {sum(ori_true_bert_list)/len(ori_true_bert_list)}\n")
