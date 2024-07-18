@@ -76,9 +76,7 @@ if __name__=="__main__":
     # retriever.model.device=device
     # del lex_MAE_retriver, data, cluster
     
-    
-    print("Initialize Agent...")
-    
+
     max_epoch = 10
     num_retrieve=1
     num_neg=16

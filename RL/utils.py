@@ -170,7 +170,7 @@ class LLMEnv_batch_version:
             for idx, i in enumerate(batch_indices):
                 self.hat_y_t[i] = responses[idx]
                 self.probs[i] = token_prob_input[idx]
-                self.probs_halulu[i] = token_prob_input[idx]
+                self.probs_halulu[i] = token_prob_resampled[idx]
                 self.response_cache[i].append(self.hat_y_t[i])
 
         for i in range(self.batch_size):
@@ -362,6 +362,12 @@ class BertAgentCritic(nn.Module):
         new_embedding = torch.nn.modules.sparse.Embedding(1026, embedding.embedding_dim, embedding.padding_idx, embedding.max_norm, embedding.norm_type, embedding.scale_grad_by_freq, embedding.sparse, dtype = torch.bfloat16)
         new_embedding.weight.data[:len(embedding.weight),:]=embedding.weight.data
         self.bert.roberta.embeddings.position_embeddings = new_embedding
+        self.bert.roberta.embeddings.register_buffer(
+            "position_ids", torch.arange(1026).expand((1, -1)), persistent=False
+        )
+        self.bert.roberta.embeddings.register_buffer(
+            "token_type_ids", torch.zeros(self.bert.roberta.embeddings.position_ids.size(), dtype=torch.long), persistent=False
+        )
         self.tokenizer = RobertaTokenizer.from_pretrained(config.roberta_dir)
         self.action_head = nn.Linear(self.bert.config.hidden_size, action_space_size)
         self.value_head = nn.Linear(self.bert.config.hidden_size, 1)
