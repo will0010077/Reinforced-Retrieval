@@ -359,8 +359,10 @@ class BertAgentCritic(nn.Module):
         super(BertAgentCritic, self).__init__()
         self.bert = RobertaForMaskedLM.from_pretrained(config.roberta_dir, torch_dtype=torch.bfloat16).to(torch.bfloat16)
         embedding = self.bert.roberta.embeddings.position_embeddings
-        embedding = torch.nn.modules.sparse.Embedding(1026, embedding.embedding_dim, embedding.padding_idx, embedding.max_norm, embedding.norm_type, embedding.scale_grad_by_freq, embedding.sparse, dtype = torch.bfloat16)
-        self.bert.roberta.embeddings.position_embeddings = embedding
+
+        new_embedding = torch.nn.modules.sparse.Embedding(1026, embedding.embedding_dim, embedding.padding_idx, embedding.max_norm, embedding.norm_type, embedding.scale_grad_by_freq, embedding.sparse, dtype = torch.bfloat16)
+        new_embedding.weight.data[:len(embedding.weight),:]=embedding.weight.data
+        self.bert.roberta.embeddings.position_embeddings = new_embedding
         self.tokenizer = RobertaTokenizer.from_pretrained(config.roberta_dir)
         self.action_head = nn.Linear(self.bert.config.hidden_size, action_space_size)
         self.value_head = nn.Linear(self.bert.config.hidden_size, 1)
@@ -515,6 +517,7 @@ class PPOTrainer:
         torch.save(returns, "save/return.pt")
         torch.save(values, "save/value.pt")
         advantages = returns - values  # Shape: (memory_size,)
+        advantages = F.normalize(advantages)
         loader = DataLoader([*zip(old_states, old_actions, old_log_probs, tokens, token_logp, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True, drop_last=True)
         step = 0
         bar = tqdm(total=self.update_epochs*len(loader), ncols=0)
@@ -539,7 +542,7 @@ class PPOTrainer:
                 # query_norm_loss = -(token_dist.log_prob(query_normal)*(1-special_tokens_mask.T.unsqueeze(-1))).mean() #(512,64,n)
                 
                 actor_loss, value_loss, a_entropy_loss, t_entropy_loss = self.ppo_loss(batch_old_log_probs, action_dist, batch_actions, batch_token_logp, token_dist, batch_token_action, batch_advantages, batch_returns, state_values)  # Shape: scalar
-                if -a_entropy_loss>0.9:
+                if -a_entropy_loss>0.7:
                     self.entropy_coef/=1.05
                 else:
                     self.entropy_coef*=1.05
