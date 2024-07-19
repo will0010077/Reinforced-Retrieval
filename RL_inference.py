@@ -92,7 +92,7 @@ if __name__=="__main__":
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 5).to(torch.bfloat16)
     agent.to(device)
     agent.eval()
-    agent.load_state_dict(torch.load("save/Agent0718_reward865.pt", map_location="cpu"))
+    agent.load_state_dict(torch.load("save/Agent.pt", map_location="cpu"))
     
     # Training loop
     total = 100000

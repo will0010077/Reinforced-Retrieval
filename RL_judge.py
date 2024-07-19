@@ -6,11 +6,11 @@ import sys
 import torch
 from torch.utils.data import DataLoader
 from torch.distributions import Categorical
-
+from torch import optim 
 from tqdm import tqdm
 
 
-from RL.utils import *
+from RL.utils import BertAgentCritic, PPOTrainer, LLMEnv_batch_version
 from DocBuilder.Retriever_k_means import cluster_builder, doc_retriever
 from DatasetLoader.collate_func import collate
 from DocBuilder.LexMAE import lex_retriever
@@ -106,13 +106,13 @@ if __name__=="__main__":
 
     print('Loading dataset...')
     data_path='data/cleandata_with_doc.jsonl'
-    dataset=NQADataset(data_path=data_path,  num_samples=64, use_doc=True)
+    dataset=NQADataset(data_path=data_path,  num_samples=None, use_doc=True)
     
     print("Initialize Env...")
     env_bs = 64
     env = LLMEnv_batch_version(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs)
     print("Initialize Agent...")
-    agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 5).to(torch.bfloat16)
+    agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
     # agent.load_state_dict(torch.load("./save/Agent.pt"))
     agent.to(device)
     
@@ -128,6 +128,7 @@ if __name__=="__main__":
     memory = []
     ma_reward=0
     reward_file = open("reward_number.txt", "a")
+    print("Start training...")
     
     trajectory = [[] for _ in range(env_bs)]  # don't do this->[[]]*env_bs
     done = [True]*env_bs
@@ -143,35 +144,27 @@ if __name__=="__main__":
                 done[i]=False
         while not any(done):
             with torch.no_grad():
-                token_logits, action_logits, state_value = agent(state)  # token_logits:(B, num, vocab), action_logits shape: (B, action_space_size), state_value shape: (B,)
-            token_logits, action_logits, state_value = token_logits.cpu(), action_logits.cpu(), state_value.cpu()
+                action_logits, state_value = agent(state)  #  action_logits shape: (B, action_space_size), state_value shape: (B,)
+            action_logits, state_value = action_logits.cpu(), state_value.cpu()
             
-            token_dist = Categorical(logits = token_logits)
             action_dist = Categorical(logits = action_logits)
-            tokens = token_dist.sample()  # Shape:(B,n)
             action = action_dist.sample()  # Shape: (B,)
             if torch.rand([1])<0.05 or episode<400:
                 action = torch.randint(env.action_space_size, [env_bs])
             else:
                 action = action_dist.sample()  # Shape: (B,)
-            
-            # if episode%20==0:
-            #     action = torch.tensor(env.steps%3)
-            # print("".join([str(a.item()) for a in action]), end='', flush=True)
-            querys = agent.tokenizer.batch_decode(tokens)
-            next_state, reward, done, _ = env.step(action, querys)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
-            token_logp = token_dist.log_prob(tokens)#(B,n)
-            for i in filter(lambda x:action[x]!=0, range(len(token_logp))):
-                token_logp[i]=float("-inf")
+
+            next_state, reward, done, _ = env.step(action)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+
             action_logp = action_dist.log_prob(action)
             for i in range(env_bs):
-                trajectory[i].append([state[i], action[i], action_logp[i], tokens[i], token_logp[i], reward[i], done[i], state_value[i]])  # Shapes: (string, (1,), (1),(15), (15) scalar, scalar (boolean), (1, 1))
+                trajectory[i].append([state[i], action[i], action_logp[i], reward[i], done[i], state_value[i]])  # Shapes: (string, (1,), (1),(15), (15) scalar, scalar (boolean), (1, 1))
             state = next_state
         # modify memory with revise reward that consider future
         for i in range(env_bs):
             if done[i]:
                 for j in range(env.steps[i]):
-                    trajectory[i][j][5] = env.revise_reward[i][j]
+                    trajectory[i][j][3] = env.revise_reward[i][j]
                 memory.extend(trajectory[i])
                 trajectory[i]=[]
                 ma_reward = 0.95*ma_reward + 0.05*sum(env.revise_reward[i])

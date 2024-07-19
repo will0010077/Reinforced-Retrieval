@@ -124,11 +124,12 @@ class LLMEnv_batch_version:
         state = self.collate.state_templete(
             self.x[idx],
             self.cat_response(self.response_cache[idx][-self.history_len:]),
-            [self.action_verb[i] for i in self.action_history[idx]]
+            [self.action_verb[i] for i in self.action_history[idx]],
+            self.d_t[idx]
         )
         return state
 
-    def step(self, actions:Tensor, querys:Tensor):
+    def step(self, actions:Tensor):
         rewards = [0] * self.batch_size
         next_states = []
 
@@ -199,19 +200,19 @@ class LLMEnv_batch_version:
             elif self.actions[idx] == 0:
                 # retrieval score
                 if self.action_history[idx][-1]!=0 and self.action_history[idx].count(0)<len(self.y[idx]):
-                    rewards[idx] += 0.2*ROUGE_score([self.ret.tokenizer.decode(self.d_t[idx], skip_special_tokens=True)], [" ".join(self.y[idx])])[0]
+                    rewards[idx] += 0.1*Bert_score([self.ret.tokenizer.decode(self.d_t[idx], skip_special_tokens=True)], [" ".join(self.y[idx])])[0]
             elif self.actions[idx] == 1:
                 # rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0]
                 proceed_indices.append(idx)
                 rewards[idx] += 0.2*self.probs[idx].exp().mean()
-                rewards[idx] += 0.05*self.probs_halulu[idx].exp().mean() 
+                rewards[idx] += 0.02*self.probs_halulu[idx].exp().mean() 
                 
             elif self.actions[idx] == 2:
                 if self.n[idx] > -1:
                     # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
                     rewrite_indices.append(idx)
                     rewards[idx] += 0.2*self.probs[idx].exp().mean() 
-                    rewards[idx] += 0.05*self.probs_halulu[idx].exp().mean() 
+                    rewards[idx] += 0.02*self.probs_halulu[idx].exp().mean() 
                 else:
                     rewards[idx] -= 0.05*len(self.y[idx])
                     
@@ -354,26 +355,25 @@ class LLMEnv_test(LLMEnv_batch_version):
 
     
 class BertAgentCritic(nn.Module):
-    def __init__(self, model_config, action_space_size, token_number):
+    def __init__(self, model_config, action_space_size):
         super(BertAgentCritic, self).__init__()
-        self.bert = RobertaForMaskedLM.from_pretrained(config.roberta_dir, torch_dtype=torch.bfloat16).to(torch.bfloat16)
-        embedding = self.bert.roberta.embeddings.position_embeddings
+        self.bert = RobertaModel.from_pretrained(config.roberta_dir, torch_dtype=torch.bfloat16).to(torch.bfloat16)
+        embedding = self.bert.embeddings.position_embeddings
 
-        new_embedding = torch.nn.modules.sparse.Embedding(1026, embedding.embedding_dim, embedding.padding_idx, embedding.max_norm, embedding.norm_type, embedding.scale_grad_by_freq, embedding.sparse, dtype = torch.bfloat16)
+        new_embedding = torch.nn.Embedding(768+2, embedding.embedding_dim, dtype = torch.bfloat16)
         new_embedding.weight.data[:len(embedding.weight),:]=embedding.weight.data
-        self.bert.roberta.embeddings.position_embeddings = new_embedding
-        self.bert.roberta.embeddings.register_buffer(
-            "position_ids", torch.arange(1026).expand((1, -1)), persistent=False
+        self.bert.embeddings.position_embeddings = new_embedding
+        self.bert.embeddings.register_buffer(
+            "position_ids", torch.arange(768+2).expand((1, -1)), persistent=False
         )
-        self.bert.roberta.embeddings.register_buffer(
-            "token_type_ids", torch.zeros(self.bert.roberta.embeddings.position_ids.size(), dtype=torch.long), persistent=False
+        self.bert.embeddings.register_buffer(
+            "token_type_ids", torch.zeros(self.bert.embeddings.position_ids.size(), dtype=torch.long), persistent=False
         )
         self.tokenizer = RobertaTokenizer.from_pretrained(config.roberta_dir)
         self.action_head = nn.Linear(self.bert.config.hidden_size, action_space_size)
         self.value_head = nn.Linear(self.bert.config.hidden_size, 1)
         self.action_space_size = action_space_size
-        self.token_number = token_number
-        self.max_token_length = self.bert.roberta.embeddings.position_embeddings.num_embeddings
+        self.max_token_length = self.bert.embeddings.position_embeddings.num_embeddings
         self.prompt_text = "These are keywords for summary: "
         # Add special tokens to the tokenizer
         special_tokens_dict = {'additional_special_tokens': ['[actor_head]', '[value_head]']}
@@ -398,12 +398,10 @@ class BertAgentCritic(nn.Module):
         }
         
         batch_size = inputs['input_ids'].size(0)
-        mask_token_id = self.tokenizer.mask_token_id
         
-        mask_tokens = torch.full((batch_size, self.token_number), mask_token_id, device = self.bert.device)
         
         # Calculate the total length with the mask tokens, special tokens, and prompt text
-        total_length = self.prompt_len + self.token_number + 2 + inputs['input_ids'].size(1)
+        total_length = self.prompt_len + 2 + inputs['input_ids'].size(1)
         
         # If total length exceeds max_token_length, truncate the input sequence
         if total_length > self.max_token_length:
@@ -412,21 +410,19 @@ class BertAgentCritic(nn.Module):
             inputs['attention_mask'] = inputs['attention_mask'][:, :-truncate_length]
         
         # Concatenate prompt text, mask tokens, and special tokens with the input sequence
-        inputs['input_ids'] = torch.cat([self.prompt_inputs['input_ids'].to(self.bert.device).repeat(batch_size, 1), mask_tokens, self.special_tokens.to(self.bert.device).repeat(batch_size, 1), inputs['input_ids']], dim=1)
-        inputs['attention_mask'] = torch.cat([torch.ones((batch_size,  self.prompt_len+ self.token_number + 2), dtype=torch.long).to(self.bert.device), inputs['attention_mask']], dim=1)
+        inputs['input_ids'] = torch.cat([self.prompt_inputs['input_ids'].to(self.bert.device).repeat(batch_size, 1), self.special_tokens.to(self.bert.device).repeat(batch_size, 1), inputs['input_ids']], dim=1)
+        inputs['attention_mask'] = torch.cat([torch.ones((batch_size,  self.prompt_len+ 2), dtype=torch.long).to(self.bert.device), inputs['attention_mask']], dim=1)
         
         outputs = self.bert(**inputs, output_hidden_states = True)
         
-        token_logits = outputs.logits[:, self.prompt_len:self.prompt_len+self.token_number, :].float()  # Shape: (batch_size, token_number, V)
-        
         # Handle special tokens for action and value heads
-        actor_head_output = outputs.hidden_states[-1][:, self.prompt_len+self.token_number, :]  # Shape: (batch_size, hidden_size)
-        value_head_output = outputs.hidden_states[-1][:, self.prompt_len+self.token_number + 1, :]  # Shape: (batch_size, hidden_size)
+        actor_head_output = outputs.hidden_states[-1][:, self.prompt_len, :]  # Shape: (batch_size, hidden_size)
+        value_head_output = outputs.hidden_states[-1][:, self.prompt_len + 1, :]  # Shape: (batch_size, hidden_size)
         
         action_logits_special = self.action_head(actor_head_output).float()  # Shape: (batch_size, action_space_size)
         state_value_special = self.value_head(value_head_output)[..., 0].float()  # Shape: (batch_size,)
 
-        return token_logits, action_logits_special, state_value_special
+        return action_logits_special, state_value_special
 
 class PPOTrainer:
     def __init__(self, model:BertAgentCritic, optimizer:torch.optim.Optimizer, gamma=0.99, clip_epsilon=0.2, lambd=0.95, update_epochs=4, batch_size=32, grad_step = 4):
@@ -445,10 +441,9 @@ class PPOTrainer:
         self.max_entr = torch.tensor(2**-6)
         self.min_entr = torch.tensor(2**-10)
         self.entropy_coef=torch.tensor(2**-7)
-        self.token_entropy_coef=torch.tensor(2**-7)
         self.sep = collate().datatokenizer.sep_token
 
-    def ppo_loss(self, action_logp, action_dist:Categorical, batch_actions, token_logp, token_dist:Categorical, batch_tokens, advantages, returns, values):
+    def ppo_loss(self, action_logp, action_dist:Categorical, batch_actions, advantages, returns, values):
         # old_log_probs shape: (batch_size,)
         # batch_action shape: (batch_size,)
         # advantages shape: (batch_size,)
@@ -462,24 +457,12 @@ class PPOTrainer:
         surr1 = ratios * advantages  # Shape: (batch_size,)
         surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size,)
         actor_loss = -torch.min(surr1, surr2).mean()  # Shape: scalar
-        
-        # # token action
-        # new_token_logp = token_dist.log_prob(batch_tokens)
-        # ratios = (new_token_logp - token_logp).clamp(-3,3).exp()  # Shape: (batch_size,n)
-        # # need to broadcast `advantages` to match the shape of `ratios`
-        # advantages = advantages.unsqueeze(-1).expand_as(ratios)  # Shape: (batch_size, n)
-        
-        # surr1 = ratios * advantages  # Shape: (batch_size, n)
-        # surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size, n)
-        # tokan_loss = -torch.min(surr1, surr2).mean()  # Shape: scalar
-        # if not torch.isnan(tokan_loss):
-        #     actor_loss+=tokan_loss
+
 
         critic_loss = F.huber_loss(values, returns, "mean", 1.0)  # Shape: scalar
         action_entropy:Tensor = action_dist.entropy().mean() #scalar
-        token_entropy =  token_dist.entropy().mean()
         
-        return actor_loss, critic_loss, - action_entropy, - token_entropy  # Shape: scalar
+        return actor_loss, critic_loss, - action_entropy  # Shape: scalar
 
     def compute_gae(self, rewards, values, dones, next_value):
         # rewards shape: (sequence_length,)
@@ -496,75 +479,60 @@ class PPOTrainer:
             returns.insert(0, gae + values[step])  # Shape: scalar
         return returns  # Shape: (sequence_length,)
     def f(self,batch):
-        batch_states, batch_actions, batch_old_log_probs, batch_token_action, batch_token_logp, batch_returns, batch_advantages = zip(*batch)
+        batch_states, batch_actions, batch_old_log_probs, batch_returns, batch_advantages = zip(*batch)
         
         batch_token = self.model.tokenizer(batch_states, return_tensors = "pt", padding = True, truncation=True, return_special_tokens_mask =True)
         questions = [batch_states[i].split(self.sep)[1] for i in range(len(batch_states))]
         questions_token = self.model.tokenizer(questions, return_tensors = "pt", padding = True, truncation=True, return_special_tokens_mask =True)
         batch_actions = torch.stack(batch_actions)
         batch_old_log_probs = torch.stack(batch_old_log_probs)
-        batch_token_action = torch.stack(batch_token_action)
-        batch_token_logp = torch.stack(batch_token_logp)
         batch_returns = torch.stack(batch_returns)
         batch_advantages = torch.stack(batch_advantages)
-        return questions_token, batch_token, batch_actions, batch_old_log_probs, batch_token_action, batch_token_logp, batch_returns, batch_advantages
+        return questions_token, batch_token, batch_actions, batch_old_log_probs, batch_returns, batch_advantages
     def update(self, memory):
-        old_states, old_actions, old_log_probs, tokens, token_logp, rewards, dones, values = zip(*memory)
+        old_states, old_actions, old_log_probs, rewards, dones, values = zip(*memory)
         returns = self.compute_gae(rewards, values, dones, next_value=0)
 
         old_states = old_states # Shape: (memory_size, state_size)
         old_actions = torch.tensor(old_actions, dtype=torch.long)  # Shape: (memory_size,)
         old_log_probs = torch.tensor(old_log_probs, dtype=torch.float32)  # Shape: (memory_size,)
-        tokens = torch.stack(tokens)  # Shape: (memory_size,n)
-        token_logp = torch.stack(token_logp)  # Shape: (memory_size,n)
         returns = torch.tensor(returns, dtype=torch.float32)  # Shape: (memory_size,)
         values = torch.tensor(values, dtype=torch.float32)  # Shape: (memory_size,)
         torch.save(returns, "save/return.pt")
         torch.save(values, "save/value.pt")
         advantages = returns - values  # Shape: (memory_size,)
         advantages = F.normalize(advantages, dim=0)
-        loader = DataLoader([*zip(old_states, old_actions, old_log_probs, tokens, token_logp, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True, drop_last=True)
+        loader = DataLoader([*zip(old_states, old_actions, old_log_probs, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True, drop_last=True)
         step = 0
         bar = tqdm(total=self.update_epochs*len(loader), ncols=0)
         for _ in range(self.update_epochs):
-            for questions_token, batch_token, batch_actions, batch_old_log_probs, batch_token_action, batch_token_logp, batch_returns, batch_advantages in loader:
+            for questions_token, batch_token, batch_actions, batch_old_log_probs, batch_returns, batch_advantages in loader:
                 step+=1
                 batch_token = batch_token.to(self.model.bert.device)  # Shape: (batch_size, n)
                 batch_actions = batch_actions.to(self.model.bert.device)  # Shape: (batch_size,)
                 batch_old_log_probs = batch_old_log_probs.to(self.model.bert.device)  # Shape: (batch_size,)
-                batch_token_action = batch_token_action.to(self.model.bert.device)  # Shape: (batch_size,n)
-                batch_token_logp = batch_token_logp.to(self.model.bert.device)  # Shape: (batch_size,n)
                 batch_returns = batch_returns.to(self.model.bert.device)  # Shape: (batch_size,)
                 batch_advantages = batch_advantages.to(self.model.bert.device)  # Shape: (batch_size,)
-                token_logits, action_logits, state_values = self.model.forward(inputs = batch_token)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
-                token_dist = Categorical(logits=token_logits)  # Shape: (batch_size,n,V)
+                action_logits, state_values = self.model.forward(inputs = batch_token)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
                 action_dist = Categorical(logits=action_logits)  # Shape: (batch_size,)
                 
                 # maximize the state's token for query dist
                 questions_token = questions_token.to(self.model.bert.device)
-                special_tokens_mask = questions_token.special_tokens_mask
-                query_normal = questions_token.input_ids.T.unsqueeze(-1)#(q_len,64,1)
-                # query_norm_loss = -(token_dist.log_prob(query_normal)*(1-special_tokens_mask.T.unsqueeze(-1))).mean() #(512,64,n)
                 
-                actor_loss, value_loss, a_entropy_loss, t_entropy_loss = self.ppo_loss(batch_old_log_probs, action_dist, batch_actions, batch_token_logp, token_dist, batch_token_action, batch_advantages, batch_returns, state_values)  # Shape: scalar
-                if -a_entropy_loss>0.7:
+                actor_loss, value_loss, a_entropy_loss = self.ppo_loss(batch_old_log_probs, action_dist, batch_actions, batch_advantages, batch_returns, state_values)  # Shape: scalar
+                if -a_entropy_loss>0.8:
                     self.entropy_coef/=1.05
                 else:
                     self.entropy_coef*=1.05
-                if -t_entropy_loss>2:
-                    self.token_entropy_coef/=1.05
-                else:
-                    self.token_entropy_coef*=1.05
                 self.entropy_coef = torch.clamp(self.entropy_coef, self.min_entr, self.max_entr)
-                self.token_entropy_coef = torch.clamp(self.token_entropy_coef, self.min_entr, self.max_entr)
                     
                 self.optimizer.zero_grad()
-                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss+self.token_entropy_coef*t_entropy_loss# + 0.001*query_norm_loss
+                loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss# + 0.001*query_norm_loss
                 loss.backward()
                 if step%self.grad_step==0:
                     torch.nn.utils.clip_grad_norm_(chain(*[self.optimizer.param_groups[param_i]['params'] for param_i in [0,1,2]]), 1.0)
                     self.optimizer.step()
-            bar.set_postfix_str(f"ac: {actor_loss:.3f}, value: {value_loss:.3f}, entropy: {-a_entropy_loss:.3f},{-t_entropy_loss:.3f}")
+            bar.set_postfix_str(f"ac: {actor_loss:.3f}, value: {value_loss:.3f}, entropy: {-a_entropy_loss:.3f}")
             bar.update(len(loader))
 
 

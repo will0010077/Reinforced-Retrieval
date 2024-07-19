@@ -18,9 +18,12 @@ tokenizer = get_tokenizer(model_type, True)
 num_layers = model2layers[model_type]
 model = get_model(model_type, num_layers, False)
 model.to("cuda")
+rouge = evaluate.load('rouge')
+bleu = evaluate.load("bleu")
+
 def Bert_score(cands: List[str], refs: List[str]) -> tuple[torch.Tensor]:
     """
-    Calculate the BERT score for each pair of sentences in a and b.
+    Calculate the BERT score for each pair of sentences in cands and refs.
     
     :param cands: List of generated answers.
     :param refs: List of reference answers.
@@ -48,25 +51,19 @@ def Bert_score(cands: List[str], refs: List[str]) -> tuple[torch.Tensor]:
         raise ValueError
     return score.unbind()
 
-def BLEU_score(a: List[str], b: List[str]) -> List[float]:
+def BLEU_score(cands: List[str], refs: List[str]) -> tuple[torch.Tensor]:
     """
-    Calculate the BLEU score for each pair of sentences in a and b.
+    Calculate the BERT score for each pair of sentences in cands and refs.
     
-    :param a: List of generated answers.
-    :param b: List of reference answers.
-    :return: List of BLEU scores for each pair of answers.
+    :param cands: List of generated answers.
+    :param refs: List of reference answers.
+    :return: List of BERT scores for each pair of answers.
     """
-    bleu_scores = []
-    for gen, ref in zip(a, b):
-        ref_tokens = nltk.word_tokenize(ref)
-        gen_tokens = nltk.word_tokenize(gen)
-        bleu = sentence_bleu([ref_tokens], gen_tokens)
-        bleu_scores.append(bleu)
-    return bleu_scores
+    
+    return bleu.compute(predictions = cands, references = refs)
 
 def ROUGE_score(pred, ref):
-    rouge = evaluate.load('rouge')
-    results = rouge.compute(predictions=pred, references=ref, use_aggregator=False)
+    results = rouge.compute(predictions=pred, references=ref, use_aggregator=False, rouge_types=['rougeL'])
     return results["rougeL"]
     #{'rouge1': 1.0, 'rouge2': 1.0, 'rougeL': 1.0, 'rougeLsum': 1.0}
 

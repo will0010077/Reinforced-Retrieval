@@ -82,7 +82,7 @@ generate_config = Config(
 seed = 87
 
 bert_dir = "huggingface/bert/"
-roberta_dir = "huggingface/roberta_head/"
+roberta_dir = "huggingface/roberta/"
 LM_dir = "huggingface/llama2/"
 
 token = "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"
