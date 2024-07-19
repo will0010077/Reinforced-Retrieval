@@ -189,10 +189,16 @@ class LLMEnv_batch_version:
         rewards = [0]*self.batch_size
         proceed_indices = []
         rewrite_indices = []
+        cands=[]
+        refs=[]
+        bert_idx=[]
         for idx in range(self.batch_size):
             if self.done[idx]:
                 if self.n[idx] > -1:
-                    rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx])], [" ".join(self.y[idx])])[0] - self.basic_reward[idx]
+                    cands.append(self.cat_response(self.response_cache[idx]))
+                    refs.append(" ".join(self.y[idx]))
+                    bert_idx.append(idx)
+                    rewards[idx] += - self.basic_reward[idx]
                     rewards[idx] += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
                     rewards[idx] = float(rewards[idx])
                     
@@ -200,22 +206,24 @@ class LLMEnv_batch_version:
             elif self.actions[idx] == 0:
                 # retrieval score
                 if self.action_history[idx][-1]!=0 and self.action_history[idx].count(0)<len(self.y[idx]):
-                    rewards[idx] += 0.1*Bert_score([self.ret.tokenizer.decode(self.d_t[idx], skip_special_tokens=True)], [" ".join(self.y[idx])])[0]
+                    cands.append(self.ret.tokenizer.decode(self.d_t[idx], skip_special_tokens=True))
+                    refs.append(" ".join(self.y[idx]))
+                    bert_idx.append(idx)
             elif self.actions[idx] == 1:
-                # rewards[idx] += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0]
-                proceed_indices.append(idx)
                 rewards[idx] += 0.2*self.probs[idx].exp().mean()
                 rewards[idx] += 0.02*self.probs_halulu[idx].exp().mean() 
                 
             elif self.actions[idx] == 2:
                 if self.n[idx] > -1:
-                    # reward += Bert_score([self.cat_response(self.response_cache[idx][-1:])], [self.y[idx][self.n[idx]]])[0] / len(self.y[idx])
-                    rewrite_indices.append(idx)
                     rewards[idx] += 0.2*self.probs[idx].exp().mean() 
                     rewards[idx] += 0.02*self.probs_halulu[idx].exp().mean() 
                 else:
                     rewards[idx] -= 0.05*len(self.y[idx])
-                    
+        
+        if cands:
+            bert = Bert_score(cands, refs)
+            for i, idx in enumerate(bert_idx):
+                rewards[idx] += bert[i]
             
         # batch_indices = proceed_indices + rewrite_indices
         # if batch_indices:

@@ -60,7 +60,7 @@ def BLEU_score(cands: List[str], refs: List[str]) -> tuple[torch.Tensor]:
     :return: List of BERT scores for each pair of answers.
     """
     
-    return bleu.compute(predictions = cands, references = refs)
+    return bleu.compute(predictions = cands, references = refs)["bleu"]
 
 def ROUGE_score(pred, ref):
     results = rouge.compute(predictions=pred, references=ref, use_aggregator=False, rouge_types=['rougeL'])
