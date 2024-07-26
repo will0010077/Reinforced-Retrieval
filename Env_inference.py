@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] ="1"
+# os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 
 import sys
@@ -84,12 +84,17 @@ if __name__=="__main__":
 
     print('Loading dataset...')
     data_path='data/dev_with_doc.jsonl'
-    dataset=NQADataset(data_path=data_path, num_samples=80, use_doc=True)
+    dataset=NQADataset(data_path=data_path, num_samples=1000, use_doc=True)
     env_bs=8
-    env = LLMEnv_test(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs, shuffle=False)
+    Enc=True
+    Policy=True
+    if Enc:
+        env = LLMEnv_test(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs, shuffle=False, step_size=15 if Policy else 1024)
+    else:
+        env = Orginal_Env(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs, shuffle=False, step_size=15 if Policy else 1024)
     
     print("Initialize Agent...")
-    agent = BertAgentCritic(config.agent_size_config, env.action_space_size, 5).to(torch.bfloat16)
+    agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
     agent.to(device)
     agent.eval()
     agent.load_state_dict(torch.load("save/Agent.pt", map_location="cpu"))
@@ -120,33 +125,33 @@ if __name__=="__main__":
                 episode+=1
                 state[i] = env.reset(i)  # Shape: string
                 done[i]=False
-        if len(q_list)>=74:
+        if len(q_list)>=200:
             break
         while not any(done):
             with torch.no_grad():
-                token_logits, action_logits, state_value = agent(state)  # token_logits:(B, num, vocab), action_logits shape: (B, action_space_size), state_value shape: (B,)
-            token_logits, action_logits, state_value = token_logits.cpu(), action_logits.cpu(), state_value.cpu()
+                action_logits, state_value = agent(state)  # token_logits:(B, num, vocab), action_logits shape: (B, action_space_size), state_value shape: (B,)
+            action_logits, state_value = action_logits.cpu(), state_value.cpu()
             
-            token_dist = Categorical(logits = token_logits/0.5)
             action_dist = Categorical(logits = action_logits/0.5)
-            tokens = token_dist.sample()  # Shape:(B,n)
             action = action_dist.sample()  # Shape: (B,)
+            if not Policy:
+                action[:]=1
             print(action[0].item(), end='', flush=True)
             
-            querys = agent.tokenizer.batch_decode(tokens)
-            next_state, reward, done, _ = env.step(action, querys)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+            next_state, reward, done, _ = env.step(action)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             # print(env.cat_response(env.response_cache))
             state = next_state
-    q_list, a_list, true_list = q_list[:80], a_list[:80], true_list[:80]
     bert = Bert_score(a_list, true_list )
     rouge = ROUGE_score(a_list, true_list )
+    bleu = BLEU_score(a_list, true_list)
     
     for j in range(len(q_list)):
         f.write(
 f'''Prompt: {q_list[j]}\nGround truth: {true_list[j]}
-[{bert[j]:.3f}, {rouge[j]:.3f}] Original true response: {a_list[j]}
+[{bleu[j]:.3f}, {rouge[j]:.3f}, {bert[j]:.3f}] Agent refined response: {a_list[j]}
 ''' +"="*80+"\n")
         
-        
-    f.write(f"RL bert: {sum(bert)/len(bert)}\n")
-    f.write(f"RL ROUGE_score: {sum(rouge)/len(rouge)}\n")
+    f.write(f"Enc:{Enc}, Policy:{Policy}\n")
+    f.write(f"BLEU: {sum(bleu)/len(bleu)}\n")
+    f.write(f"ROUGE: {sum(rouge)/len(rouge)}\n")
+    f.write(f"BERT: {sum(bert)/len(bert)}\n")

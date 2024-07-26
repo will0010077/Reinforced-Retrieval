@@ -51,16 +51,21 @@ def Bert_score(cands: List[str], refs: List[str]) -> tuple[torch.Tensor]:
         raise ValueError
     return score.unbind()
 
-def BLEU_score(cands: List[str], refs: List[str]) -> tuple[torch.Tensor]:
+def BLEU_score(cands: List[str], refs: List[str]) -> List[float]:
     """
-    Calculate the BERT score for each pair of sentences in cands and refs.
+    Calculate the BLEU score for each pair of sentences in a and b.
     
-    :param cands: List of generated answers.
-    :param refs: List of reference answers.
-    :return: List of BERT scores for each pair of answers.
+    :param a: List of generated answers.
+    :param b: List of reference answers.
+    :return: List of BLEU scores for each pair of answers.
     """
-    
-    return bleu.compute(predictions = cands, references = refs)["bleu"]
+    bleu_scores = []
+    for gen, ref in zip(cands, refs):
+        ref_tokens = nltk.word_tokenize(ref)
+        gen_tokens = nltk.word_tokenize(gen)
+        bleu = sentence_bleu([ref_tokens], gen_tokens)
+        bleu_scores.append(bleu)
+    return bleu_scores
 
 def ROUGE_score(pred, ref):
     results = rouge.compute(predictions=pred, references=ref, use_aggregator=False, rouge_types=['rougeL'])

@@ -34,7 +34,7 @@ def generate_segments(text:str, window_size, step)-> list[str]:
         segment_list.append(" ".join(segment_data))
     return  segment_list
 class LLMEnv_batch_version:
-    def __init__(self, dataset, LM: EncTunedLM, ret: lex_retriever, action_space_size, history_len=24, batch_size=8, shuffle = True):
+    def __init__(self, dataset, LM: EncTunedLM, ret: lex_retriever, action_space_size, history_len=24, batch_size=8, shuffle = True, step_size=15):
         self.dataset = dataset  # List of tuples (x, y)
         self.action_space_size = action_space_size
         self.history_len = history_len
@@ -45,7 +45,7 @@ class LLMEnv_batch_version:
         self.collate = collate()
         self.batch_size = batch_size  # Set batch size as length of dataset
         self.action_verb=[" retrieve", " proceed", " rewrite"]
-        
+        self.step_size=step_size
         
         
         self.x = [None] * self.batch_size
@@ -82,13 +82,18 @@ class LLMEnv_batch_version:
     @torch.no_grad()
     def _build_embedding(self, idx):
         self.document[idx] = generate_segments(self.document[idx],96,64)[:256]
-        tokens = self.collate.datatokenizer(self.document[idx], padding = True, truncation=True, max_length=256, return_tensors="pt", add_special_tokens=False).to(self.ret.device)
-        self.input_ids[idx] = tokens.input_ids
-        self.attention_mask[idx] = tokens.attention_mask
-        self.embedding[idx] = self.ret.forward(tokens)#(N,d)
+        self.input_ids[idx] = []
+        self.attention_mask[idx] = []
+        self.embedding[idx] = []
+        for i in range(0,len(self.document[idx]), 32):
+            tokens = self.collate.datatokenizer(self.document[idx][i:i+32], padding = True, truncation=True, max_length=256, return_tensors="pt", add_special_tokens=False).to(self.ret.device)
+            self.input_ids[idx].extend(tokens.input_ids)
+            self.attention_mask[idx].extend(tokens.attention_mask)
+            self.embedding[idx].extend(self.ret.forward(tokens)) #(N,d)
+        self.embedding[idx] = torch.stack(self.embedding[idx])
     @torch.no_grad()
     def retrieve(self, ids:list, x:list[str]):
-        query = self.ret.tokenizer(x, return_tensors="pt", padding=True).to(self.ret.device)
+        query = self.ret.tokenizer(x, return_tensors="pt", padding=True, truncation=True).to(self.ret.device)
         query = self.ret.forward(query)#(b,d)
         retrieved = []
         for idx, q in zip(ids, query):
@@ -301,7 +306,7 @@ class LLMEnv_batch_version:
 
 class LLMEnv_test(LLMEnv_batch_version):
     
-    def step(self, actions:Tensor, querys:Tensor):
+    def step(self, actions:Tensor):
         rewards = [0] * self.batch_size
         next_states = []
 
@@ -358,9 +363,18 @@ class LLMEnv_test(LLMEnv_batch_version):
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
         d_t = self.ret.tokenizer(d_t, return_tensors="pt", padding=True).to(self.LM.device)
 
-        responses = self.LM.generate(messages, Doc_tokens=d_t, max_new_tokens=15, decode=False)
+        responses = self.LM.generate(messages, Doc_tokens=d_t, max_new_tokens=self.step_size, decode=False)
         return responses
+class Orginal_Env(LLMEnv_test):
+    def get_next_response(self, indices):
+        response = [self.cat_response(self.response_cache[i]) for i in indices]
+        messages = [" ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
+        d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
 
+        messages = [messages[j][:57]+ d_t[j]+ messages[j][57:] for j in range(len(messages))]
+        responses = self.LM.generate(messages, Doc_tokens=None, max_new_tokens=self.step_size, decode=False)
+        return responses
+    
     
 class BertAgentCritic(nn.Module):
     def __init__(self, model_config, action_space_size):
