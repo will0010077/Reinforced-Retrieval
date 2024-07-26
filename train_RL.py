@@ -13,11 +13,11 @@ from tqdm import tqdm
 from RL.utils import BertAgentCritic, PPOTrainer, LLMEnv_batch_version
 from DocBuilder.Retriever_k_means import cluster_builder, doc_retriever
 from DatasetLoader.collate_func import collate
+from DatasetLoader.dataset import NQADataset
 from DocBuilder.LexMAE import lex_retriever
 from DocBuilder.utils import restore_batched_list, generate_mask, tensor_retuen_type
 from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
-from fintune_contriver import NQADataset
 from metric.reward import BLEU_score, Bert_score
 import yaml
 import peft

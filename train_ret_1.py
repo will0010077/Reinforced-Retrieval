@@ -5,6 +5,7 @@ from DocBuilder.Retriever_k_means import cluster_builder, doc_retriever
 from DocBuilder.utils import top_k_sparse, inner, unbind_sparse, Masking, tensor_retuen_type
 from DocBuilder.LexMAE import lex_encoder,lex_decoder, lex_retriever
 from DatasetLoader import dataset
+from DatasetLoader.dataset import NQADataset
 import time,datetime
 import h5py
 import torch
@@ -18,7 +19,6 @@ from functools import partial
 from tqdm import tqdm
 import random
 import yaml,sys,os
-from fintune_contriver import NQADataset
 
 with open('config.yaml', 'r') as yamlfile:
     config = yaml.safe_load(yamlfile)
