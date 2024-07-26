@@ -150,12 +150,13 @@ def flush_buffer_to_file(f, buffer, output_lock):
 
 
 class NQADataset(Dataset):
-    def __init__(self, data_path='data/cleandata.jsonl',num_samples=None, use_long=True, use_doc = False):
+    def __init__(self, data_path='data/cleandata.jsonl',num_samples=None, use_long=True, use_short=False, use_doc = False):
         '''
         '''
         self.data_path = data_path
         self.num_samples = num_samples
         self.use_long = use_long
+        self.use_short = use_short
         self.use_doc = use_doc
         self.data = self.load_data()
     def load_data(self):
@@ -186,13 +187,26 @@ class NQADataset(Dataset):
         out = [self.data[idx]['question']]
         if self.use_long:
             out += [self.data[idx]['long_answer']]
-        else:
+        if self.use_short:
             out += [self.data[idx]['short_answers']]
         if self.use_doc:
             out += [self.data[idx]['document']]
 
         return out#str(sample['question_text']),long_answer#text_without_tags
+class PretrainEnc(NQADataset):
+    def __getitem__(self, idx):
 
+        out = [self.data[idx]['question']]
+        if self.use_long:
+            out += [self.data[idx]['long_answer']]
+        if self.use_short:
+            out += [self.data[idx]['short_answers']]
+        if self.use_doc:
+            out += [self.data[idx]['document']]
+            out += [self.data[idx]['score']]
+
+        return out#str(sample['question_text']),long_answer#text_without_tags
+    
 def text_normal(text):
     if isinstance(text, list):
         return [*map(text_normal, text)]
@@ -445,15 +459,13 @@ class DocumentDatasets():
         #return DocumentLeng
         return sum(self.file_len)
 
-def cleandata():
-    data_path='data/v1.0-simplified_simplified-nq-train.jsonl'
-    data_path = 'data/v1.0-simplified_nq-dev-all.jsonl'
-    dataset=cleanDataset(data_path=data_path,num_samples=None)
+def cleandata(datapath, outpath):
+    dataset=cleanDataset(data_path=datapath,num_samples=None)
 
     num_data=0
     total_a_lenth=[]
-    file = open("data/dev_with_doc.jsonl", 'w')
-    for i in tqdm(range(len(dataset))):
+    file = open(outpath, 'w')
+    for i in tqdm(range(len(dataset)), ncols=0):
         ans, la, d, q=dataset[i]
         if ans:
             for a in ans:
@@ -464,7 +476,7 @@ def cleandata():
         if ans or la:
             if len(la)>3000:
                 continue
-            json.dump(dict(question=q, short_answers=ans,long_answer=la, document = d), file)
+            json.dump(dict(question=q, short_answers=ans, long_answer=la, document = d), file)
             file.write('\n')
             num_data+=1
     file.close()

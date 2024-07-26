@@ -1,15 +1,15 @@
 import sys
-sys.path.append("../../")
+sys.path.append("../")
 
 # Load model directly
 import torch
 
 from torch import nn, Tensor
 from transformers import AutoTokenizer, AutoModel, BertConfig, BertModel
-from config import enc_size_config
+import config
 
-config = enc_size_config
-bert_dir = "huggingface/bert"
+bert_dir = config.bert_dir
+enc_size_config = config.enc_size_config
 tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
 # token = tokenizer.convert_ids_to_tokens(torch.arange(1000)) #998-104
 class KnowEncoder(torch.nn.Module):
@@ -18,20 +18,27 @@ class KnowEncoder(torch.nn.Module):
         if dims % groups !=0:
             raise ValueError(f'Dims must divided by groups')
         
-        self.model = BertModel(BertConfig(**config))
+        self.model = BertModel(BertConfig(**enc_size_config))
+        bert = BertModel.from_pretrained(bert_dir)
+        self.model.embeddings = bert.embeddings
+        self.model.encoder.layer[0] = bert.encoder.layer[0]
+        del bert
         self.tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
         self.num_layers=num_layers
+        self.num_prefix = num_prefix
         self.dims=dims
         self.dtype=dtype
         self.encoder_heads=nn.Sequential(
-            nn.Conv1d(config['hidden_size'], config['hidden_size']//2, kernel_size=1, groups=groups),
+            nn.Conv1d(enc_size_config['hidden_size'], enc_size_config['hidden_size']//4, kernel_size=1, groups=groups),
             nn.LeakyReLU(inplace = True),
-            nn.Conv1d(config['hidden_size']//2, self.dims, kernel_size=1, groups=groups),
+            nn.Conv1d(enc_size_config['hidden_size']//4, self.dims, kernel_size=1, groups=groups),
         )
         
+        self.adaption_prompt = nn.Parameter(
+            torch.empty(self.num_layers-1, self.num_prefix, self.dims, device=self.model.device, dtype=self.dtype).normal_()
+        )#(layer, P, d)
         assert num_prefix<999-104
-        self.num_prefix = num_prefix
-        self.register_buffer('prefix_tokens', torch.arange(104, 104+self.num_prefix*num_layers).unsqueeze_(0))#(1,P)
+        self.register_buffer('prefix_tokens', torch.arange(104, 104+self.num_prefix).unsqueeze_(0), persistent=False)#(1,P)
         self.prefix_tokens:Tensor
     def forward(self, x, k=1, device = None)->tuple[torch.Tensor]:
         '''
@@ -50,26 +57,26 @@ class KnowEncoder(torch.nn.Module):
 
         # cat special token for output fixed length of embedding, update attention mask length
         input_ids = torch.cat([self.prefix_tokens.tile([B*k,1]), x.input_ids], dim = 1)
-        attention_mask = torch.cat([torch.ones([B*k, self.num_prefix*self.num_layers], device = x.input_ids.device), x.attention_mask], dim = 1)
+        attention_mask = torch.cat([torch.ones([B*k, self.num_prefix], device = x.input_ids.device), x.attention_mask], dim = 1)
 
 
         y=self.model(input_ids =input_ids, attention_mask = attention_mask)
         
         
-        y = y.last_hidden_state[:,:self.num_prefix*self.num_layers,:]#(B*k, P*layer, d)
+        y = y.last_hidden_state[:,:self.num_prefix,:]#(B*k, P, d)
         y = y.transpose(1,2)#(B*k, d, P*layer)
-        y = self.encoder_heads.forward(y)#(B*k, dims, P*layer)
+        y = self.encoder_heads.forward(y)#(B*k, dims, P)
         # print('encoder_heads output:', y.shape)
         y = y.to(self.dtype)
-        y = y.reshape([B, k, self.dims, self.num_prefix, self.num_layers, ])#(B, k, dims, P, layer)
+        y = y.reshape([B, k, self.dims, self.num_prefix, ])#(B, k, dims, P)
         # print('prefix output:', y.shape)
         
         
-        y = y.permute([4,0,1,3,2])#(layer, B, k, P, dims)
+        y = y.permute([0,1,3,2])#(B, k, P, dims)
         # print('before cat output:', y.shape)
-        y = y.reshape([self.num_layers, B, k*self.num_prefix, self.dims])#(layer, B, k*P, dims)
+        y = y.reshape([B, k*self.num_prefix, self.dims])#(B, k*P, dims)
         y = y.to(device, non_blocking=True)
-        return y.unbind()
+        return self.adaption_prompt.unsqueeze(1).tile([1,B,1,1]).unbind() + (y,)
     
     def mean_pooling(self,token_embeddings, mask):
         token_embeddings = token_embeddings.masked_fill(~mask[..., None].bool(), 0.)

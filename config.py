@@ -19,15 +19,13 @@ train_config = Config(
 enc_config = Config(
     enc_lr=3.e-4,
     groups=1,
-    num_layers=16,
-    num_prefix=8
+    num_layers=24,
+    num_prefix=20
 )
 
 enc_size_config = Config(
-    num_hidden_layers=6,
-    num_attention_heads=8,
+    num_hidden_layers=1,
     hidden_size=768,
-    intermediate_size=3072
 )
 
 agent_size_config = Config(

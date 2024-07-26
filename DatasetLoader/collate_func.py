@@ -1,5 +1,6 @@
 import torch
 from torch.nn.utils.rnn import pad_sequence
+from torch.distributions import Categorical
 
 from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizerFast
 from DocBuilder.utils import tensor_retuen_type
@@ -81,6 +82,14 @@ class collate():
         unlabel, unlabel_str, qa_tokens = self.prepare_QA_token(q_str, a_str)
         a_tokens = self.datatokenizer(a_str, return_tensors='pt', padding=True, max_length=256, truncation =True,)
         return tensor_retuen_type(**qa_tokens), unlabel, unlabel_str, q_str, a_str, tensor_retuen_type(**a_tokens)
+    def collate_qa_docs(self, batch:list):
+        q_str, a_str, docs, score = [*zip(*batch)]
+        q_str, a_str, docs, score = [*map(list, [q_str, a_str, docs, score])]
+        unlabel, unlabel_str, qa_tokens = self.prepare_QA_token(q_str, a_str)
+        
+        docs = [d[Categorical(logits=torch.tensor(s)/5).sample()] for d, s in zip(docs, score)]
+        d_tokens = self.datatokenizer(docs, return_tensors='pt', padding=True, truncation =True,)
+        return tensor_retuen_type(**qa_tokens), tensor_retuen_type(**d_tokens)
     
     def collate_q(self, batch:list):
         batch = [self.templete(q, a) for q, a in batch]

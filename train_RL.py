@@ -88,6 +88,7 @@ if __name__=="__main__":
     lex_MAE_retriver=lex_retriever()
     lex_MAE_retriver.to(device)
     lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever904.pt', map_location='cpu')['enc_model_state_dict'], assign=False)
+    lex_MAE_retriver.eval()
     # data=torch.load('data/data_reduced_2000000.pt') ## shape:(N,d)
     # retriever = doc_retriever(model = lex_MAE_retriver, data = data, cluster=cluster)
     # retriever.to(device)

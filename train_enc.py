@@ -62,16 +62,16 @@ def training(rank, world_size, max_epoch, model, loader, port):
         else:
             train_bar = loader
         li=-50
-        for i,(qa_tokens, q_tokens, q_str, a_str, a_tokens) in enumerate(train_bar):
+        for i,(qa_tokens, d_tokens) in enumerate(train_bar):
             qa_tokens = qa_tokens.to(rank)
-            a_tokens = a_tokens.to(rank)
+            d_tokens = d_tokens.to(rank)
                     
 
             # feed doc into KnowEnc to get prefix
             if not train_config.use_prefix:
-                a_tokens = None
+                d_tokens = None
             
-            ref_logp, (LM_output, loss) = model.forward(qa_tokens, Doc_tokens = a_tokens)
+            ref_logp, (LM_output, loss) = model.forward(qa_tokens, Doc_tokens = d_tokens)
             # kl = F.kl_div(LM_output, ref_logp, log_target=True, reduction="batchmean")
             loss = loss.mean()
             # loss += kl.mean() * 0.1
