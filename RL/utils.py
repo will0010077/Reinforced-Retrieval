@@ -527,6 +527,7 @@ class PPOTrainer:
         loader = DataLoader([*zip(old_states, old_actions, old_log_probs, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True, drop_last=True)
         step = 0
         bar = tqdm(total=self.update_epochs*len(loader), ncols=0)
+        self.optimizer.zero_grad()
         for _ in range(self.update_epochs):
             for questions_token, batch_token, batch_actions, batch_old_log_probs, batch_returns, batch_advantages in loader:
                 step+=1
@@ -548,7 +549,6 @@ class PPOTrainer:
                     self.entropy_coef*=1.05
                 self.entropy_coef = torch.clamp(self.entropy_coef, self.min_entr, self.max_entr)
                     
-                self.optimizer.zero_grad()
                 loss:Tensor = self.action_coef*actor_loss+ self.value_coef*value_loss+ self.entropy_coef*a_entropy_loss# + 0.001*query_norm_loss
                 loss.backward()
                 if step%self.grad_step==0:

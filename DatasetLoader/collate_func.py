@@ -88,7 +88,7 @@ class collate():
         unlabel, unlabel_str, qa_tokens = self.prepare_QA_token(q_str, a_str)
         
         docs = [d[Categorical(logits=torch.tensor(s)/5).sample()] for d, s in zip(docs, score)]
-        d_tokens = self.datatokenizer(docs, return_tensors='pt', padding=True, truncation =True,)
+        d_tokens = self.datatokenizer(docs, return_tensors='pt', padding=True, max_length=256, truncation =True,)
         return tensor_retuen_type(**qa_tokens), tensor_retuen_type(**d_tokens)
     
     def collate_q(self, batch:list):

@@ -17,7 +17,7 @@ from DocBuilder.LexMAE import lex_retriever
 from DocBuilder.utils import restore_batched_list, generate_mask, tensor_retuen_type
 from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
-from fintune_contriver import NQADataset
+from train_ret_2 import NQADataset
 from metric.reward import BLEU_score, Bert_score, ROUGE_score
 import yaml
 import peft

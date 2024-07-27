@@ -18,9 +18,8 @@ train_config = Config(
 
 enc_config = Config(
     enc_lr=3.e-4,
-    groups=1,
-    num_layers=24,
-    num_prefix=20
+    num_layers=16,
+    num_prefix=10
 )
 
 enc_size_config = Config(

@@ -1,4 +1,6 @@
 import sys
+import os
+# os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 import torch
 from torch import nn
@@ -14,7 +16,7 @@ from safetensors.torch import save_file, load_file
 from DocBuilder.utils import tensor_retuen_type
 from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
-from DatasetLoader.dataset import NQADataset
+from DatasetLoader.dataset import PretrainEnc
 from DatasetLoader.collate_func import collate
 from config import bert_dir, LM_dir, token, enc_config, train_config
 
@@ -47,7 +49,7 @@ def training(rank, world_size, max_epoch, model, loader, port):
     model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
     param_list =[p for p in model.parameters() if p.requires_grad]
-    optim = torch.optim.Adam(param_list, lr = enc_config.enc_lr) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
+    optim = torch.optim.AdamW(param_list, lr = enc_config.enc_lr, betas = train_config.betas) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
 
     iter_step = len(loader)*max_epoch
     warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.02))
@@ -56,6 +58,7 @@ def training(rank, world_size, max_epoch, model, loader, port):
     # torch.optim.lr_scheduler.CosineAnnealingWarmRestarts()
     ma_loss=1.8
     stream = torch.cuda.current_stream(rank)
+    optim.zero_grad()
     for epoch in range(max_epoch):
         if rank==10:
             train_bar=tqdm(loader, ncols=0)
@@ -78,16 +81,15 @@ def training(rank, world_size, max_epoch, model, loader, port):
 
 
             if train_config.use_prefix:
-                optim.zero_grad()
                 loss.backward()
-                if i%max(int(192/(world_size*bs)),1)==0:
+                if i%max(int(128/(world_size*bs)),1)==0:
                     optim.step()
             scheduler.step()
 # stop rolling ! 
             ma_loss = ma_loss*0.98 + 0.02*(loss if not torch.isnan(loss) else ma_loss)
             if rank==0 and i-li>=50:
                 li=i
-                print(f'epoch {epoch}, iter {i:3d}, loss: {ma_loss.item():.3f}/{loss.item():.3f}', flush=True)
+                print(f'epoch {epoch}, iter {i:3d}/{len(train_bar)}, loss: {ma_loss.item():.3f}/{loss.item():.3f}', flush=True)
         stream.synchronize()
         dist.barrier()
         if rank==0:
@@ -110,6 +112,7 @@ def main():
     # print(LM.model.config)
     print(f'Initialize KnowEnc with {dtype}...')
     Encoder=KnowEncoder(dims = num_dims, **enc_config, dtype=dtype)
+    Encoder.train()
     Encoder.to(torch.bfloat16)
 
     print(f'Initialize EncTunedLM...')
@@ -121,9 +124,9 @@ def main():
         LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
     max_epoch = 40//world_size
     print('Loading dataset...')
-    data_path = "data/cleandata.jsonl"
-    dataset = NQADataset(data_path=data_path)
-    loader = DataLoader(dataset, batch_size=24, shuffle=True, num_workers=1, collate_fn=collate(LM_dir, bert_dir).collate_qa, persistent_workers=True)
+    data_path = "data/train_QAD.jsonl"
+    dataset = PretrainEnc(data_path=data_path, use_doc=True, use_short=False, use_long=True)
+    loader = DataLoader(dataset, batch_size=16, shuffle=True, num_workers=1, collate_fn=collate(LM_dir, bert_dir).collate_qa_docs, persistent_workers=True)
     
 
     with socket() as s:
