@@ -69,7 +69,7 @@ class collate():
         cat_qa = [q+" "+a+self.eos_token for q, a in zip(unlabel_str, label)]
         unlabel = self.LMtokenizer(text=unlabel_str).input_ids
         # print(max([len(s) for s in unlabel]))
-        tokens = self.LMtokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=512, truncation =True,)
+        tokens = self.LMtokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=256, truncation =True,)
         
         for i in range(len(texts)):
             tokens['labels'][i, :len(unlabel[i])]=-100
@@ -87,7 +87,7 @@ class collate():
         q_str, a_str, docs, score = [*map(list, [q_str, a_str, docs, score])]
         unlabel, unlabel_str, qa_tokens = self.prepare_QA_token(q_str, a_str)
         
-        docs = [d[Categorical(logits=torch.tensor(s)/5).sample()] for d, s in zip(docs, score)]
+        docs = [d[Categorical(logits=torch.tensor(s)/2).sample()] for d, s in zip(docs, score)]
         d_tokens = self.datatokenizer(docs, return_tensors='pt', padding=True, max_length=256, truncation =True,)
         return tensor_retuen_type(**qa_tokens), tensor_retuen_type(**d_tokens)
     
@@ -104,11 +104,10 @@ class collate():
         query, answer = query.strip(), answer.strip()
         messages = [
             {"role": "system", "content": "This is the searched knowledge: [KNOW]  [/KNOW] Please answer user questions based on the above knowledge\n"},
-            {"role": "user", "content": query},
-            {"role": "assistant", "content": answer}
+            {"role": "user", "content": query}
         ]
         prompt = self.LMtokenizer.apply_chat_template(
-            messages[:2],
+            messages,
             tokenize=False, 
             add_generation_prompt=True,
             return_tensors="pt"

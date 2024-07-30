@@ -18,7 +18,7 @@ from DocBuilder.utils import restore_batched_list, generate_mask, tensor_retuen_
 from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
 from train_ret_2 import NQADataset
-from metric.reward import BLEU_score, Bert_score, ROUGE_score
+from metric.reward import BLEU_1_score, Bert_score, ROUGE_score
 import yaml
 import peft
 
@@ -36,9 +36,13 @@ if __name__=="__main__":
     device='cuda'
     
 
+    Enc=True
+    Policy=False
     print('Loading LLM')
     generate_config = config.generate_config
     generate_config.temperature=0.2
+    if not Policy:
+        generate_config.do_sample=False
     LM = LLaMa_reader(LM_dir, device, token = token, from_pretrained=True, generate_config=generate_config)
     dtype = LM.dtype
     num_dims = LM.model.config.hidden_size
@@ -55,7 +59,7 @@ if __name__=="__main__":
     if True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
+        LM.load_state_dict(torch.load("save/EncLM_0.pt", map_location='cpu'))
     # init retriever
 
     print('Initilize retriever')
@@ -84,14 +88,13 @@ if __name__=="__main__":
 
     print('Loading dataset...')
     data_path='data/dev_with_doc.jsonl'
+    num_testing=200
     dataset=NQADataset(data_path=data_path, num_samples=1000, use_doc=True)
     env_bs=8
-    Enc=True
-    Policy=True
     if Enc:
-        env = LLMEnv_test(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs, shuffle=False, step_size=15 if Policy else 1024)
+        env = LLMEnv_test(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs, shuffle=False, step_size=15 if Policy else 256)
     else:
-        env = Orginal_Env(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs, shuffle=False, step_size=15 if Policy else 1024)
+        env = Orginal_Env(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs, shuffle=False, step_size=15 if Policy else 256)
     
     print("Initialize Agent...")
     agent = BertAgentCritic(config.agent_size_config, env.action_space_size).to(torch.bfloat16)
@@ -125,7 +128,7 @@ if __name__=="__main__":
                 episode+=1
                 state[i] = env.reset(i)  # Shape: string
                 done[i]=False
-        if len(q_list)>=200:
+        if len(q_list)>=num_testing:
             break
         while not any(done):
             with torch.no_grad():
@@ -142,16 +145,18 @@ if __name__=="__main__":
             # print(env.cat_response(env.response_cache))
             state = next_state
     bert = Bert_score(a_list, true_list )
-    rouge = ROUGE_score(a_list, true_list )
-    bleu = BLEU_score(a_list, true_list)
+    R_1, R_2, R_L = ROUGE_score(a_list, true_list )
+    bleu = BLEU_1_score(a_list, true_list)
     
     for j in range(len(q_list)):
         f.write(
 f'''Prompt: {q_list[j]}\nGround truth: {true_list[j]}
-[{bleu[j]:.3f}, {rouge[j]:.3f}, {bert[j]:.3f}] Agent refined response: {a_list[j]}
+[{bleu[j]:.3f}, {R_1[j]:.3f}, {R_2[j]:.3f}, {R_L[j]:.3f}, {bert[j]:.3f}] Agent refined response: {a_list[j]}
 ''' +"="*80+"\n")
         
     f.write(f"Enc:{Enc}, Policy:{Policy}\n")
-    f.write(f"BLEU: {sum(bleu)/len(bleu)}\n")
-    f.write(f"ROUGE: {sum(rouge)/len(rouge)}\n")
+    f.write(f"BLEU_1: {sum(bleu)/len(bleu)}\n")
+    f.write(f"ROUGE-1: {sum(R_1)/len(R_1)}\n")
+    f.write(f"ROUGE-2: {sum(R_2)/len(R_2)}\n")
+    f.write(f"ROUGE-L: {sum(R_L)/len(R_L)}\n")
     f.write(f"BERT: {sum(bert)/len(bert)}\n")

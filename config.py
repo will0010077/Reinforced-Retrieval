@@ -9,7 +9,7 @@ train_config = Config(
     num_samples=None,
     lm_lr=1.e-5,
     agent_lr=3.e-5,
-    betas=[0.9, 0.98],
+    betas=[0.9, 0.99],
     weight_decay=0.01,
     topk=1,
     load_E=True,
@@ -17,13 +17,13 @@ train_config = Config(
 )
 
 enc_config = Config(
-    enc_lr=3.e-4,
-    num_layers=16,
+    enc_lr=5.e-5,
+    num_layers=32,
     num_prefix=10
 )
 
 enc_size_config = Config(
-    num_hidden_layers=1,
+    num_hidden_layers=12,
     hidden_size=768,
 )
 

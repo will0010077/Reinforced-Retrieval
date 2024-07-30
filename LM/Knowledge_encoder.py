@@ -19,7 +19,8 @@ class KnowEncoder(torch.nn.Module):
         self.model = BertModel(BertConfig(**enc_size_config))
         bert = BertModel.from_pretrained(bert_dir)
         self.model.embeddings = bert.embeddings
-        self.model.encoder.layer[0] = bert.encoder.layer[0]
+        for i in range(enc_size_config.num_hidden_layers):
+            self.model.encoder.layer[i] = bert.encoder.layer[i]
         del bert
         self.tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
         self.num_layers=num_layers
@@ -32,7 +33,7 @@ class KnowEncoder(torch.nn.Module):
             torch.empty(self.num_layers-1, self.num_prefix, self.dims, device=self.model.device, dtype=self.dtype).normal_()
         )#(layer, P, d)
         assert num_prefix<999-104
-        self.register_buffer('prefix_tokens', torch.arange(104, 104+self.num_prefix).unsqueeze_(0), persistent=False)#(1,P)
+        self.register_buffer('prefix_tokens', torch.arange(104, 104+self.num_prefix*2).unsqueeze_(0), persistent=False)#(1,P)
         self.prefix_tokens:Tensor
     def forward(self, x, k=1, device = None)->tuple[torch.Tensor]:
         '''
@@ -51,25 +52,25 @@ class KnowEncoder(torch.nn.Module):
 
         # cat special token for output fixed length of embedding, update attention mask length
         input_ids = torch.cat([self.prefix_tokens.tile([B*k,1]), x.input_ids], dim = 1)[:,:512]
-        attention_mask = torch.cat([torch.ones([B*k, self.num_prefix], device = x.input_ids.device), x.attention_mask], dim = 1)[:,:512]
+        attention_mask = torch.cat([torch.ones([B*k, self.prefix_tokens.shape[1]], device = x.input_ids.device), x.attention_mask], dim = 1)[:,:512]
 
 
         y=self.model(input_ids =input_ids, attention_mask = attention_mask)
         
         
-        y = y.last_hidden_state[:,:self.num_prefix,:]#(B*k, P, d)
+        y = y.last_hidden_state[:,:self.prefix_tokens.shape[1],:]#(B*k, P, d)
         y = self.encoder_heads.forward(y)#(B*k, P, dim)
         # print('encoder_heads output:', y.shape)
         y = y.to(self.dtype)
-        y = y.reshape([B, k, self.num_prefix, self.dims, ])#(B, k, P, dim)
+        y = y.reshape([B, k, self.prefix_tokens.shape[1], self.dims, ])#(B, k, P, dim)
         # print('prefix output:', y.shape)
         
         
         # print('before cat output:', y.shape)
-        y = y.reshape([B, k*self.num_prefix, self.dims])#(B, k*P, dims)
+        y = y.reshape([B, k*self.prefix_tokens.shape[1], self.dims])#(B, k*P, dims)
         y = y.to(device, non_blocking=True)
         # static prefix + Enc prefix
-        return self.adaption_prompt.unsqueeze(1).unbind() + (y,)
+        return  (y,)+ self.adaption_prompt.unsqueeze(1).unbind()
     
     def mean_pooling(self,token_embeddings, mask):
         token_embeddings = token_embeddings.masked_fill(~mask[..., None].bool(), 0.)

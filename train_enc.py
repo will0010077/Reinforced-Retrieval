@@ -41,26 +41,30 @@ def setup(rank, world_size, port):
 def cleanup():
     dist.destroy_process_group()
 
-def training(rank, world_size, max_epoch, model, loader, port):
+def training(rank, world_size, max_epoch, model, dataset, port):
     print(f"Running DDP on rank {rank}.")
     setup(rank, world_size, port)
+    start, end = int(len(dataset)*rank/world_size), int(len(dataset)*(rank+1)/world_size)
+    loader = DataLoader(dataset[start: end], batch_size=16, shuffle=True, num_workers=1, collate_fn=collate(LM_dir, bert_dir).collate_qa_docs, persistent_workers=True)
+
     bs = loader.batch_size
     model = model.to(rank)
     model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
-    param_list =[p for p in model.parameters() if p.requires_grad]
-    optim = torch.optim.AdamW(param_list, lr = enc_config.enc_lr, betas = train_config.betas) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
-
+    Enc_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_prompt" not in n]
+    Prefix_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_prompt" in n]
+    optim = torch.optim.AdamW([{"params":Enc_param_list, "lr":enc_config.enc_lr}, {"params":Prefix_param_list, "lr":2e-3}], betas = train_config.betas) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
+    # optim.load_state_dict(torch.load("save/EncLM_optim.pt", map_location="cpu"))
     iter_step = len(loader)*max_epoch
-    warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.02))
-    decay =  torch.optim.lr_scheduler.PolynomialLR(optim, total_iters=int(iter_step*1.3), power=1.5)
+    warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.005))
+    decay =  torch.optim.lr_scheduler.PolynomialLR(optim, total_iters=int(iter_step*1.3), power=2.0)
     scheduler = torch.optim.lr_scheduler.SequentialLR(optim, [warm, decay], [warm.total_iters])
     # torch.optim.lr_scheduler.CosineAnnealingWarmRestarts()
-    ma_loss=1.8
+    ma_loss=2
     stream = torch.cuda.current_stream(rank)
     optim.zero_grad()
     for epoch in range(max_epoch):
-        if rank==10:
+        if rank==0:
             train_bar=tqdm(loader, ncols=0)
         else:
             train_bar = loader
@@ -82,18 +86,19 @@ def training(rank, world_size, max_epoch, model, loader, port):
 
             if train_config.use_prefix:
                 loss.backward()
-                if i%max(int(128/(world_size*bs)),1)==0:
+                if i%max(int(64/(world_size*bs)),1)==0:
                     optim.step()
             scheduler.step()
 # stop rolling ! 
-            ma_loss = ma_loss*0.98 + 0.02*(loss if not torch.isnan(loss) else ma_loss)
-            if rank==0 and i-li>=50:
+            ma_loss = ma_loss*0.98 + 0.02*(loss.item() if not torch.isnan(loss) else ma_loss)
+            if rank==0 and i-li>=1:
                 li=i
-                print(f'epoch {epoch}, iter {i:3d}/{len(train_bar)}, loss: {ma_loss.item():.3f}/{loss.item():.3f}', flush=True)
+                train_bar.set_postfix_str(f'epoch {epoch}, iter {i:3d}/{len(train_bar)}, loss: {ma_loss:.3f}/{loss.item():.3f}')
+                # print(f'epoch {epoch}, iter {i:3d}/{len(train_bar)}, loss: {ma_loss.item():.3f}/{loss.item():.3f}', flush=True)
         stream.synchronize()
         dist.barrier()
         if rank==0:
-            torch.save(model.module.state_dict(), "save/EncLM.pt")
+            torch.save(model.module.state_dict(), f"save/EncLM_{epoch}.pt")
             torch.save(optim.state_dict(), "save/EncLM_optim.pt")
         dist.barrier()
         
@@ -122,18 +127,17 @@ def main():
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
         LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
-    max_epoch = 40//world_size
+    max_epoch = 4
     print('Loading dataset...')
     data_path = "data/train_QAD.jsonl"
-    dataset = PretrainEnc(data_path=data_path, use_doc=True, use_short=False, use_long=True)
-    loader = DataLoader(dataset, batch_size=16, shuffle=True, num_workers=1, collate_fn=collate(LM_dir, bert_dir).collate_qa_docs, persistent_workers=True)
-    
+    dataset = PretrainEnc(data_path=data_path, use_doc=True, use_short=False, use_long=True, num_samples = None)
+    dataset = [*dataset]
 
     with socket() as s:
         s.bind(('', 0))
         port = s.getsockname()[1]
     mp.spawn(training,
-        args=(world_size, max_epoch, LM, loader, port),
+        args=(world_size, max_epoch, LM, dataset, port),
         nprocs=world_size,
         join=True)
         

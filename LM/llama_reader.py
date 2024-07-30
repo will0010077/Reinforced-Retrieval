@@ -42,7 +42,7 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
         if kwargs.get("output_attention", False):
             raise NotImplementedError("output_attention is not currently supported.")
         output, _, past_key_value = self.model(**kwargs)
-        if not hasattr(self, "adaption_prompt"):
+        if self.__dict__.get("adaption_prompt", None) is None:
             return output, None, past_key_value
         bsz = output.shape[0]
         q_len = output.shape[1]

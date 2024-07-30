@@ -12,7 +12,7 @@ from DocBuilder.LexMAE import lex_retriever
 from DocBuilder.utils import sparse_retrieve_rep, tensor_retuen_type
 from DatasetLoader.collate_func import collate
 from LM.llama_reader import EncTunedLM
-from metric.reward import BLEU_score, Bert_score,ROUGE_score
+from metric.reward import BLEU_1_score, Bert_score,ROUGE_score
 import random
 import config
 import torch.optim as optim
@@ -350,6 +350,8 @@ class LLMEnv_test(LLMEnv_batch_version):
         for i in range(self.batch_size):
             next_states.append(self.get_state(i))
             self.steps[i] += 1
+            if sum(map(len, self.response_cache[i][1:]))>=256:
+                self.done[i]=True
         self.last_action = actions.clone()
 
         return next_states, rewards, self.done, {}
@@ -370,7 +372,6 @@ class Orginal_Env(LLMEnv_test):
         response = [self.cat_response(self.response_cache[i]) for i in indices]
         messages = [" ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
-
         messages = [messages[j][:57]+ d_t[j]+ messages[j][57:] for j in range(len(messages))]
         responses = self.LM.generate(messages, Doc_tokens=None, max_new_tokens=self.step_size, decode=False)
         return responses
