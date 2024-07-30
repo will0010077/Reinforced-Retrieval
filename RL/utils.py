@@ -12,7 +12,7 @@ from DocBuilder.LexMAE import lex_retriever
 from DocBuilder.utils import sparse_retrieve_rep, tensor_retuen_type
 from DatasetLoader.collate_func import collate
 from LM.llama_reader import EncTunedLM
-from metric.reward import BLEU_1_score, Bert_score,ROUGE_score
+from metric.reward import metric
 import random
 import config
 import torch.optim as optim
@@ -33,8 +33,10 @@ def generate_segments(text:str, window_size, step)-> list[str]:
         # print(segment_data.shape)
         segment_list.append(" ".join(segment_data))
     return  segment_list
-class LLMEnv_batch_version:
+class LLMEnv_batch_version(nn.Module):
     def __init__(self, dataset, LM: EncTunedLM, ret: lex_retriever, action_space_size, history_len=24, batch_size=8, shuffle = True, step_size=15):
+        super().__init__()
+        self.metric = metric()
         self.dataset = dataset  # List of tuples (x, y)
         self.action_space_size = action_space_size
         self.history_len = history_len
@@ -113,7 +115,7 @@ class LLMEnv_batch_version:
         chunk_size = 10
         self.y[idx] = [' '.join(self.y[idx][i:i + chunk_size]) for i in range(0, len(self.y[idx]), chunk_size)]
         self.d_t[idx] = self.retrieve([idx], self.x[idx])[0]
-        self.basic_reward[idx] = Bert_score([self.get_basic_response(self.x[idx], " ".join(self.y[idx]), self.d_t[idx])[0]], [" ".join(self.y[idx])])[0]
+        self.basic_reward[idx] = self.metric.Bert_score([self.get_basic_response(self.x[idx], " ".join(self.y[idx]), self.d_t[idx])[0]], [" ".join(self.y[idx])])[0]
         self.reward[idx] = []
         self.revise_reward[idx] = []
         self.hat_y_t[idx] = None
@@ -226,7 +228,7 @@ class LLMEnv_batch_version:
                     rewards[idx] -= 0.05*len(self.y[idx])
         
         if cands:
-            bert = Bert_score(cands, refs)
+            bert = self.metric.Bert_score(cands, refs)
             for i, idx in enumerate(bert_idx):
                 rewards[idx] += bert[i]
             
@@ -364,7 +366,9 @@ class LLMEnv_test(LLMEnv_batch_version):
         messages = [" ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
         d_t = self.ret.tokenizer(d_t, return_tensors="pt", padding=True).to(self.LM.device)
-
+        if self.step_size>64:
+            for i in indices:
+                self.done[i] = True
         responses = self.LM.generate(messages, Doc_tokens=d_t, max_new_tokens=self.step_size, decode=False)
         return responses
 class Orginal_Env(LLMEnv_test):
@@ -393,6 +397,7 @@ class BertAgentCritic(nn.Module):
             "token_type_ids", torch.zeros(self.bert.embeddings.position_ids.size(), dtype=torch.long), persistent=False
         )
         self.tokenizer = RobertaTokenizer.from_pretrained(config.roberta_dir)
+        self.tokenizer.model_max_length = 768
         self.action_head = nn.Linear(self.bert.config.hidden_size, action_space_size)
         self.value_head = nn.Linear(self.bert.config.hidden_size, 1)
         self.action_space_size = action_space_size
@@ -448,7 +453,7 @@ class BertAgentCritic(nn.Module):
         return action_logits_special, state_value_special
 
 class PPOTrainer:
-    def __init__(self, model:BertAgentCritic, optimizer:torch.optim.Optimizer, gamma=0.99, clip_epsilon=0.2, lambd=0.95, update_epochs=4, batch_size=32, grad_step = 4):
+    def __init__(self, model:BertAgentCritic, optimizer:torch.optim.Optimizer, gamma=0.99, clip_epsilon=0.2, lambd=0.95, update_epochs=4, batch_size=32, grad_step = 4, ):
         self.model = model
         self.optimizer = optimizer
         self.gamma = gamma
@@ -464,7 +469,8 @@ class PPOTrainer:
         self.max_entr = torch.tensor(2**-6)
         self.min_entr = torch.tensor(2**-10)
         self.entropy_coef=torch.tensor(2**-7)
-        self.sep = collate().datatokenizer.sep_token
+        self.collate = collate()
+        self.sep = self.collate.datatokenizer.sep_token
 
     def ppo_loss(self, action_logp, action_dist:Categorical, batch_actions, advantages, returns, values):
         # old_log_probs shape: (batch_size,)
@@ -504,18 +510,19 @@ class PPOTrainer:
     def f(self,batch):
         batch_states, batch_actions, batch_old_log_probs, batch_returns, batch_advantages = zip(*batch)
         
-        batch_token = self.model.tokenizer(batch_states, return_tensors = "pt", padding = True, truncation=True, return_special_tokens_mask =True)
+        batch_token = self.model.module.tokenizer(batch_states, return_tensors = "pt", padding = True, truncation=True, return_special_tokens_mask =True)
         questions = [batch_states[i].split(self.sep)[1] for i in range(len(batch_states))]
-        questions_token = self.model.tokenizer(questions, return_tensors = "pt", padding = True, truncation=True, return_special_tokens_mask =True)
+        questions_token = self.model.module.tokenizer(questions, return_tensors = "pt", padding = True, truncation=True, return_special_tokens_mask =True)
         batch_actions = torch.stack(batch_actions)
         batch_old_log_probs = torch.stack(batch_old_log_probs)
         batch_returns = torch.stack(batch_returns)
         batch_advantages = torch.stack(batch_advantages)
         return questions_token, batch_token, batch_actions, batch_old_log_probs, batch_returns, batch_advantages
-    def update(self, memory):
+    
+    def inin_loader(self, memory):
+        
         old_states, old_actions, old_log_probs, rewards, dones, values = zip(*memory)
         returns = self.compute_gae(rewards, values, dones, next_value=0)
-
         old_states = old_states # Shape: (memory_size, state_size)
         old_actions = torch.tensor(old_actions, dtype=torch.long)  # Shape: (memory_size,)
         old_log_probs = torch.tensor(old_log_probs, dtype=torch.float32)  # Shape: (memory_size,)
@@ -525,23 +532,29 @@ class PPOTrainer:
         torch.save(values, "save/value.pt")
         advantages = returns - values  # Shape: (memory_size,)
         advantages = F.normalize(advantages, dim=0)
-        loader = DataLoader([*zip(old_states, old_actions, old_log_probs, returns, advantages)], self.batch_size, True, collate_fn=self.f, num_workers=1, pin_memory = True, persistent_workers=True, drop_last=True)
-        step = 0
+        return [*zip(old_states, old_actions, old_log_probs, returns, advantages)]
+    
+    def update(self, memory, loader=None): 
+        if loader is None:
+            data = self.inin_loader(memory)
+            loader = DataLoader(data, self.batch_size, True, collate_fn=self.f, pin_memory = True, num_workers=0, persistent_workers=False, drop_last=True)
+            
         bar = tqdm(total=self.update_epochs*len(loader), ncols=0)
         self.optimizer.zero_grad()
+        step = 0
         for _ in range(self.update_epochs):
             for questions_token, batch_token, batch_actions, batch_old_log_probs, batch_returns, batch_advantages in loader:
                 step+=1
-                batch_token = batch_token.to(self.model.bert.device)  # Shape: (batch_size, n)
-                batch_actions = batch_actions.to(self.model.bert.device)  # Shape: (batch_size,)
-                batch_old_log_probs = batch_old_log_probs.to(self.model.bert.device)  # Shape: (batch_size,)
-                batch_returns = batch_returns.to(self.model.bert.device)  # Shape: (batch_size,)
-                batch_advantages = batch_advantages.to(self.model.bert.device)  # Shape: (batch_size,)
-                action_logits, state_values = self.model.forward(inputs = batch_token)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
+                batch_token = batch_token.to(self.model.device)  # Shape: (batch_size, n)
+                batch_actions = batch_actions.to(self.model.device)  # Shape: (batch_size,)
+                batch_old_log_probs = batch_old_log_probs.to(self.model.device)  # Shape: (batch_size,)
+                batch_returns = batch_returns.to(self.model.device)  # Shape: (batch_size,)
+                batch_advantages = batch_advantages.to(self.model.device)  # Shape: (batch_size,)
+                action_logits, state_values = self.model(inputs = batch_token)  # logits shape: (batch_size, action_space_size), state_values shape: (batch_size, 1)
                 action_dist = Categorical(logits=action_logits)  # Shape: (batch_size,)
                 
                 # maximize the state's token for query dist
-                questions_token = questions_token.to(self.model.bert.device)
+                questions_token = questions_token.to(self.model.device)
                 
                 actor_loss, value_loss, a_entropy_loss = self.ppo_loss(batch_old_log_probs, action_dist, batch_actions, batch_advantages, batch_returns, state_values)  # Shape: scalar
                 if -a_entropy_loss>0.8:
@@ -579,7 +592,7 @@ class LLMEnv:
         self.y = [' '.join(self.y[i:i+chunk_size]) for i in range(0,len(self.y), chunk_size)]
         self.d_t, zt = self.ret.retrieve(self.x, k=1, num_search=4)
         self.d_t = self.d_t.squeeze(1)
-        self.basic_reward = Bert_score([self.get_basic_response(self.x, " ".join(self.y))[0]], [" ".join(self.y)])[0]
+        self.basic_reward = self.metric.Bert_score([self.get_basic_response(self.x, " ".join(self.y))[0]], [" ".join(self.y)])[0]
         self.halulu = []
         self.revise_reward = []
         self.hat_y_t = None
@@ -640,19 +653,19 @@ class LLMEnv:
         reward=0
         if self.done:
             if self.n>-1:
-                reward += 2*(Bert_score([self.cat_response(self.response_cache)], [" ".join(self.y)])[0] - self.basic_reward)
+                reward += 2*(self.metric.Bert_score([self.cat_response(self.response_cache)], [" ".join(self.y)])[0] - self.basic_reward)
                 reward += 0.1*((self.n+1)/len(self.y))**2
                 reward += sum(self.halulu)
         # elif self.action == 0:
         #     if self.last_action!=0:
         #         reward += Bert_score([self.collate.datatokenizer.decode(self.d_t[0])], [" ".join(self.y)])[0]/len(self.y)
         if self.action==1:
-            reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
+            reward += self.metric.Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
             self.halulu.append(0.5*self.log_prob[0].exp().mean()/len(self.y))
         elif self.action==2:
             reward -= 0.01
             if self.n>-1:
-                reward += Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
+                reward += self.metric.Bert_score([self.cat_response(self.response_cache[-1:])], [self.y[self.n]])[0]/len(self.y)
                 self.halulu.pop(-1)
                 self.halulu.append(0.5*self.log_prob[0].exp().mean()/len(self.y))
                 for i in reversed(range(self.steps)):
@@ -699,32 +712,32 @@ class LLMEnv:
         
         return response
 
-if __name__=='__main__':
+# if __name__=='__main__':
     
     
-    # Example usage
-    env = LLMEnv()
-    model = BertAgentCritic(agent_size_config, env.action_space_size)
-    trainer = PPOTrainer(model)
+    # # Example usage
+    # env = LLMEnv()
+    # model = BertAgentCritic(agent_size_config, env.action_space_size)
+    # trainer = PPOTrainer(model)
 
-    # Training loop
-    for episode in range(1000):
-        state = env.reset()  # Shape: string
-        done = False
-        memory = []
+    # # Training loop
+    # for episode in range(1000):
+    #     state = env.reset()  # Shape: string
+    #     done = False
+    #     memory = []
 
-        while not done:
-            token_logits, action_logits, state_value = model([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
-            token_dist = Categorical(logits = token_logits)
-            action_dist = Categorical(logits = action_logits)
-            tokens = token_dist.sample()
-            action = action_dist.sample()  # Shape: (1,)
-            print(model.tokenizer.batch_decode(tokens))
-            exit()
+    #     while not done:
+    #         token_logits, action_logits, state_value = model([state])  # action_logits shape: (1, action_space_size), state_value shape: (1, 1)
+    #         token_dist = Categorical(logits = token_logits)
+    #         action_dist = Categorical(logits = action_logits)
+    #         tokens = token_dist.sample()
+    #         action = action_dist.sample()  # Shape: (1,)
+    #         print(model.tokenizer.batch_decode(tokens))
+    #         exit()
 
-            next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
-            memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
+    #         next_state, reward, done, _ = env.step(action.item())  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
+    #         memory.append((state, action, dist.log_prob(action), reward, done, state_value))  # Shapes: (string, (1,), (1, action_space_size), scalar, scalar (boolean), (1, 1))
 
-            state = next_state
+    #         state = next_state
 
-        trainer.update(memory)
+    #     trainer.update(memory)

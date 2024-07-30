@@ -18,7 +18,7 @@ from DocBuilder.utils import restore_batched_list, generate_mask, tensor_retuen_
 from LM.llama_reader import LLaMa_reader, EncTunedLM
 from LM.Knowledge_encoder import KnowEncoder
 from train_ret_2 import NQADataset
-from metric.reward import BLEU_1_score, Bert_score, ROUGE_score
+from metric.reward import metric
 import yaml
 import peft
 
@@ -34,8 +34,8 @@ LM_dir = "/usr/model/llama2-7b/"
 if __name__=="__main__":
     print(torch.cuda.device_count())
     device='cuda'
-    
-
+    metric_c = metric()
+    metric_c.to(device)
     Enc=True
     Policy=False
     print('Loading LLM')
@@ -51,7 +51,7 @@ if __name__=="__main__":
     Encoder=KnowEncoder(dims = num_dims, **config.enc_config, dtype=dtype)
 
     print(f'Initialize EncTunedLM...')
-    peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=config.enc_config.num_layers, adapter_len=1)}
+    peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=32, adapter_len=1)}
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
     LM.to(device)
     LM.eval()
@@ -59,7 +59,7 @@ if __name__=="__main__":
     if True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        LM.load_state_dict(torch.load("save/EncLM_0.pt", map_location='cpu'))
+        LM.load_state_dict(torch.load("save/EncLM_1.pt", map_location='cpu'))
     # init retriever
 
     print('Initilize retriever')
@@ -144,9 +144,9 @@ if __name__=="__main__":
             next_state, reward, done, _ = env.step(action)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             # print(env.cat_response(env.response_cache))
             state = next_state
-    bert = Bert_score(a_list, true_list )
-    R_1, R_2, R_L = ROUGE_score(a_list, true_list )
-    bleu = BLEU_1_score(a_list, true_list)
+    bert = metric_c.Bert_score(a_list, true_list )
+    R_1, R_2, R_L = metric_c.ROUGE_score(a_list, true_list )
+    bleu = metric_c.BLEU_1_score(a_list, true_list)
     
     for j in range(len(q_list)):
         f.write(

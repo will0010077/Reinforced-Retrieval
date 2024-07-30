@@ -53,7 +53,7 @@ def training(rank, world_size, max_epoch, model, dataset, port):
 
     Enc_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_prompt" not in n]
     Prefix_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_prompt" in n]
-    optim = torch.optim.AdamW([{"params":Enc_param_list, "lr":enc_config.enc_lr}, {"params":Prefix_param_list, "lr":2e-3}], betas = train_config.betas) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
+    optim = torch.optim.AdamW([{"params":Enc_param_list, "lr":enc_config.enc_lr}, {"params":Prefix_param_list, "lr":1e-3}], betas = train_config.betas) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
     # optim.load_state_dict(torch.load("save/EncLM_optim.pt", map_location="cpu"))
     iter_step = len(loader)*max_epoch
     warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.005))
@@ -121,13 +121,13 @@ def main():
     Encoder.to(torch.bfloat16)
 
     print(f'Initialize EncTunedLM...')
-    peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=enc_config.num_layers, adapter_len=1)}
+    peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=32, adapter_len=1)}
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
-    if False:
+    if True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        LM.load_state_dict(torch.load("save/EncLM.pt", map_location='cpu'))
-    max_epoch = 4
+        LM.load_state_dict(torch.load("save/EncLM_1.pt", map_location='cpu'))
+    max_epoch = 10
     print('Loading dataset...')
     data_path = "data/train_QAD.jsonl"
     dataset = PretrainEnc(data_path=data_path, use_doc=True, use_short=False, use_long=True, num_samples = None)
