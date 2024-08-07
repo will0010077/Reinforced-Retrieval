@@ -170,7 +170,7 @@ class NQADataset(Dataset):
                 if not self.use_doc:
                     del line["document"]
                 if self.use_long and line["long_answer"]:
-                    if len(line["long_answer"])>1000 or len(line["long_answer"])<3:
+                    if len(line["long_answer"])>900 or len(line["long_answer"])<3:
                         skip+=1
                         continue
                     data.append(line)

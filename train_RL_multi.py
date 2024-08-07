@@ -1,7 +1,6 @@
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
-
 import sys
 import torch
 from torch.utils.data import DataLoader
@@ -53,14 +52,14 @@ def training(rank:int, world_size:int, port, total:int, env:LLMEnv_batch_version
 
 
     env.to(rank)
-    
+    ratio = 1.
     agent = agent.to(rank)
-    agent = DDP(agent, device_ids=[rank], find_unused_parameters=True)
-    Agent_optim = optim.AdamW([{"params": agent.module.bert.parameters(), "lr": config.train_config.agent_lr},
-                               {"params": agent.module.value_head.parameters(), "lr": config.train_config.agent_lr*3},
-                               {"params": agent.module.action_head.parameters(), "lr": config.train_config.agent_lr*3}], betas=config.train_config.betas)
+    agentDDP = DDP(agent, device_ids=[rank], find_unused_parameters=True)
+    Agent_optim = optim.AdamW([{"params": agentDDP.module.bert.parameters(), "lr": config.train_config.agent_lr* ratio},
+                               {"params": agentDDP.module.value_head.parameters(), "lr": 3e-4 * ratio},
+                               {"params": agentDDP.module.action_head.parameters(), "lr": 3e-4 * ratio}], betas=config.train_config.betas)
     
-    trainer = PPOTrainer(agent, Agent_optim, gamma=1.0, clip_epsilon=0.2, lambd=0.95, update_epochs=4//world_size, batch_size=64, grad_step=1)
+    trainer = PPOTrainer(agentDDP, Agent_optim, gamma=0.99, clip_epsilon=0.2, lambd=0.95, update_epochs=max(4//world_size, 1), batch_size=64, grad_step=1)
     
     reduce = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power=1.5)
     warmup = optim.lr_scheduler.LinearLR(Agent_optim, 1e-5, 1, total_iters=int(total*0.001))
@@ -100,23 +99,27 @@ def training(rank:int, world_size:int, port, total:int, env:LLMEnv_batch_version
             for i in range(env.batch_size):
                 trajectory[i].append([state[i], action[i], action_logp[i], reward[i], done[i], state_value[i]])  # Shapes: (string, (1,), (1),(15), (15) scalar, scalar (boolean), (1, 1))
             state = next_state
+            
+            
+        rewards = []
         for i in range(env.batch_size):
             if done[i]:
-                for j in range(env.steps[i]):
-                    trajectory[i][j][3] = env.revise_reward[i][j]
+                
+                rewards.append(sum([trajectory[i][j][3] for j in range(env.steps[i])]))
                 memory.extend(trajectory[i])
                 trajectory[i] = []
-        rewards = [sum(env.revise_reward[i]) for i in range(env.batch_size) if done[i]]
 
         for r in rewards:
             reward_file.write(f"{r:.5f}\n")
             
         if len(memory)>(2048):
+            dist.barrier()
             reward_file.flush()
             data = trainer.inin_loader(memory)
             loader = DataLoader(data, trainer.batch_size, True, collate_fn=trainer.f, pin_memory = True, num_workers=0, persistent_workers=False, drop_last=True)
             
             trainer.update(memory, loader)
+            dist.barrier()
             del loader
             if rank==0:
                 memory[:] = []
@@ -125,12 +128,12 @@ def training(rank:int, world_size:int, port, total:int, env:LLMEnv_batch_version
             save_time = time()
             if rank == 0:
                 # Save Agent weight
-                torch.save(agent.state_dict(), f"./save/Agent_{rank}.pt")
+                torch.save(agentDDP.module.state_dict(), f"./save/Agent_{rank}.pt")
 
 def main():
     world_size = torch.cuda.device_count()
     total = 100000
-    env_bs = 32
+    env_bs = 16
 
     print(torch.cuda.device_count())
 
@@ -139,7 +142,7 @@ def main():
     dtype = LM.dtype
     num_dims = LM.model.config.hidden_size
     print(f'Initialize KnowEnc with {dtype}...')
-    Encoder = KnowEncoder(dims=num_dims, **config.enc_config, dtype=dtype)
+    Encoder = KnowEncoder(dims=num_dims, **config.enc_config, dtype=dtype).to(torch.bfloat16)
 
     print(f'Initialize EncTunedLM...')
     peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=32, adapter_len=1)}
@@ -147,7 +150,7 @@ def main():
     LM.eval()
 
     print(f'Loading EncTunedLM weight...')
-    LM.load_state_dict(torch.load("save/EncLM_1.pt", map_location='cpu'))
+    LM.load_state_dict(torch.load("save/EncLM_5.pt", map_location='cpu'))
 
     print('Initialize retriever')
     lex_MAE_retriver = lex_retriever()
@@ -163,7 +166,7 @@ def main():
     
     print("Initialize Agent...")
     agent = BertAgentCritic(config.agent_size_config, 3).to(torch.bfloat16)
-
+    # agent.load_state_dict(torch.load("save/Agent_0.pt", map_location="cpu"))
     memory = multiprocessing.Manager().list() 
     with socket() as s:
         s.bind(('', 0))

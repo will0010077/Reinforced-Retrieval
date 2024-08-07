@@ -189,14 +189,15 @@ class LLaMa_reader(torch.nn.Module):
         tokens = self.tokenizer(message, padding=True ,truncation=True,return_tensors='pt')
         tokens = tokens.to(self.model.device)
         
-        self.model.generation_config.stop_strings.extend(stop_strings)
+        # self.model.generation_config.stop_strings.extend(stop_strings)
         outputs = self.model.generate(**tokens,
+                                        **self.generate_config,
                                         streamer=streamer,
                                         max_new_tokens=max_new_tokens,
-                                        past_key_values = cache,
-                                        **self.generate_config)
+                                        # tokenizer = self.tokenizer,
+                                        )
         
-        [self.model.generation_config.stop_strings.pop(-1) for _ in range(len(stop_strings))]
+        # [self.model.generation_config.stop_strings.pop(-1) for _ in range(len(stop_strings))]
 
         outputs = [outputs[j][len(tokens.input_ids[0]):].cpu() for j in range(len(tokens.input_ids))]
         if decode:

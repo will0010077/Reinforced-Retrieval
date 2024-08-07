@@ -8,7 +8,7 @@ train_config = Config(
     spilt=0.95,
     num_samples=None,
     lm_lr=1.e-5,
-    agent_lr=3.e-5,
+    agent_lr=1.e-5,
     betas=[0.9, 0.99],
     weight_decay=0.01,
     topk=1,
@@ -17,7 +17,7 @@ train_config = Config(
 )
 
 enc_config = Config(
-    enc_lr=5.e-5,
+    enc_lr=3.e-5,
     num_layers=4,
     num_prefix=10
 )
@@ -28,11 +28,7 @@ enc_size_config = Config(
 )
 
 agent_size_config = Config(
-    num_hidden_layers=8,
-    num_attention_heads=12,
-    hidden_size=768,
-    intermediate_size=3072,
-    max_position_embeddings = 1024,
+    max_position_embeddings = 512,
 )
 
 lex = Config(
@@ -60,10 +56,8 @@ cluster_config = Config(
 )
 
 data_config = Config(
-    num_doc=200000,
-    num_samples=100000,
-    windows=192,
-    step=128
+    windows=96,
+    step=64
 )
 
 generate_config = Config(

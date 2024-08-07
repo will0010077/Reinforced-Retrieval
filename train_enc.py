@@ -53,10 +53,10 @@ def training(rank, world_size, max_epoch, model, dataset, port):
 
     Enc_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_prompt" not in n]
     Prefix_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_prompt" in n]
-    optim = torch.optim.AdamW([{"params":Enc_param_list, "lr":enc_config.enc_lr}, {"params":Prefix_param_list, "lr":1e-3}], betas = train_config.betas) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
-    # optim.load_state_dict(torch.load("save/EncLM_optim.pt", map_location="cpu"))
+    optim = torch.optim.AdamW([{"params":Enc_param_list, "lr":enc_config.enc_lr}, {"params":Prefix_param_list, "lr":5e-4, "weight_decay": 0.02}], betas = train_config.betas) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
+    optim.load_state_dict(torch.load("save/EncLM_optim.pt", map_location="cpu"))
     iter_step = len(loader)*max_epoch
-    warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.005))
+    warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.01))
     decay =  torch.optim.lr_scheduler.PolynomialLR(optim, total_iters=int(iter_step*1.3), power=2.0)
     scheduler = torch.optim.lr_scheduler.SequentialLR(optim, [warm, decay], [warm.total_iters])
     # torch.optim.lr_scheduler.CosineAnnealingWarmRestarts()
@@ -126,7 +126,7 @@ def main():
     if True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        LM.load_state_dict(torch.load("save/EncLM_1.pt", map_location='cpu'))
+        LM.load_state_dict(torch.load("save/EncLM_5.pt", map_location='cpu'))
     max_epoch = 10
     print('Loading dataset...')
     data_path = "data/train_QAD.jsonl"
