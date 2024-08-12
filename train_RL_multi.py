@@ -56,10 +56,10 @@ def training(rank:int, world_size:int, port, total:int, env:LLMEnv_batch_version
     agent = agent.to(rank)
     agentDDP = DDP(agent, device_ids=[rank], find_unused_parameters=True)
     Agent_optim = optim.AdamW([{"params": agentDDP.module.bert.parameters(), "lr": config.train_config.agent_lr* ratio},
-                               {"params": agentDDP.module.value_head.parameters(), "lr": 3e-4 * ratio},
-                               {"params": agentDDP.module.action_head.parameters(), "lr": 3e-4 * ratio}], betas=config.train_config.betas)
+                               {"params": agentDDP.module.value_head.parameters(), "lr": config.train_config.agent_head_lr* ratio, "weight_decay": 0.02},
+                               {"params": agentDDP.module.action_head.parameters(), "lr": config.train_config.agent_head_lr * ratio, "weight_decay": 0.02}], betas=config.train_config.betas)
     
-    trainer = PPOTrainer(agentDDP, Agent_optim, gamma=0.99, clip_epsilon=0.2, lambd=0.95, update_epochs=max(4//world_size, 1), batch_size=64, grad_step=1)
+    trainer = PPOTrainer(agentDDP, Agent_optim, update_epochs=max(4//world_size, 1), **config.ppo_config)
     
     reduce = optim.lr_scheduler.PolynomialLR(Agent_optim, total_iters=int(total*1.2), power=1.5)
     warmup = optim.lr_scheduler.LinearLR(Agent_optim, 1e-5, 1, total_iters=int(total*0.001))
@@ -94,7 +94,7 @@ def training(rank:int, world_size:int, port, total:int, env:LLMEnv_batch_version
                 action = action_dist.sample()  # Shape: (B,)
 
             next_state, reward, done, _ = env.step(action)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
-
+            # print(action, reward, done)
             action_logp = action_dist.log_prob(action)
             for i in range(env.batch_size):
                 trajectory[i].append([state[i], action[i], action_logp[i], reward[i], done[i], state_value[i]])  # Shapes: (string, (1,), (1),(15), (15) scalar, scalar (boolean), (1, 1))
@@ -104,15 +104,16 @@ def training(rank:int, world_size:int, port, total:int, env:LLMEnv_batch_version
         rewards = []
         for i in range(env.batch_size):
             if done[i]:
-                
-                rewards.append(sum([trajectory[i][j][3] for j in range(env.steps[i])]))
+                traj_reward = [trajectory[i][j][3] for j in range(env.steps[i])]
+                rewards.append(sum(traj_reward))
                 memory.extend(trajectory[i])
                 trajectory[i] = []
+                # print(env.cat_response(env.response_cache[i]))
 
         for r in rewards:
             reward_file.write(f"{r:.5f}\n")
             
-        if len(memory)>(2048):
+        if len(memory)>(512):
             dist.barrier()
             reward_file.flush()
             data = trainer.inin_loader(memory)
@@ -132,8 +133,9 @@ def training(rank:int, world_size:int, port, total:int, env:LLMEnv_batch_version
 
 def main():
     world_size = torch.cuda.device_count()
-    total = 100000
-    env_bs = 16
+    # world_size = 1
+    total = 5000
+    env_bs = 32
 
     print(torch.cuda.device_count())
 
@@ -160,13 +162,13 @@ def main():
     
     print('Loading dataset...')
     data_path = 'data/cleandata_with_doc.jsonl'
-    dataset = NQADataset(data_path=data_path, num_samples=None, use_doc=True)
+    dataset = NQADataset(data_path=data_path, num_samples=18, use_doc=True)
     
     env = LLMEnv_batch_version(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs)
     
     print("Initialize Agent...")
     agent = BertAgentCritic(config.agent_size_config, 3).to(torch.bfloat16)
-    # agent.load_state_dict(torch.load("save/Agent_0.pt", map_location="cpu"))
+    agent.load_state_dict(torch.load("save/Agent_0.pt", map_location="cpu"))
     memory = multiprocessing.Manager().list() 
     with socket() as s:
         s.bind(('', 0))

@@ -8,16 +8,23 @@ train_config = Config(
     spilt=0.95,
     num_samples=None,
     lm_lr=1.e-5,
-    agent_lr=1.e-5,
+    agent_lr=3.e-5,
+    agent_head_lr = 5e-4,
     betas=[0.9, 0.99],
     weight_decay=0.01,
     topk=1,
     load_E=True,
     use_prefix=True
 )
-
+ppo_config = Config(
+    gamma=0.99,
+    clip_epsilon=0.2,
+    lambd=0.95,
+    batch_size=64,
+    grad_step=1
+)
 enc_config = Config(
-    enc_lr=3.e-5,
+    enc_lr=1.e-4,
     num_layers=4,
     num_prefix=10
 )
@@ -64,7 +71,7 @@ generate_config = Config(
     no_repeat_ngram_size=8,
     do_sample=True,
     temperature=1,
-    top_p=0.5,
+    top_p=0.9,
     top_k=None,
     num_beams=1,
     bad_words_ids=None

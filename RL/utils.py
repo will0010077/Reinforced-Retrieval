@@ -34,7 +34,7 @@ def generate_segments(text:str, window_size, step)-> list[str]:
         segment_list.append(" ".join(segment_data))
     return  segment_list
 class LLMEnv_batch_version(nn.Module):
-    def __init__(self, dataset, LM: EncTunedLM, ret: lex_retriever, action_space_size, history_len=24, batch_size=8, shuffle = True, step_size=15, eos_id = None):
+    def __init__(self, dataset, LM: EncTunedLM, ret: lex_retriever, action_space_size, history_len=4, batch_size=8, shuffle = True, step_size=15, eos_id = None):
         super().__init__()
         self.metric = metric()
         self.dataset = dataset  # List of tuples (x, y)
@@ -115,6 +115,9 @@ class LLMEnv_batch_version(nn.Module):
         self._build_embedding(idx)
         self.y[idx] = self.y[idx].split(' ')
         chunk_size = 10
+        if len(self.y[idx]) > 10*chunk_size:
+            chunk_size = len(self.y[idx])//6+1
+            
         self.y[idx] = [' '.join(self.y[idx][i:i + chunk_size]) for i in range(0, len(self.y[idx]), chunk_size)]
         self.d_t[idx] = self.retrieve([idx], self.x[idx])[0]
         self.basic_reward[idx] = self.metric.Bert_score([self.get_basic_response(self.x[idx], " ".join(self.y[idx]), self.d_t[idx])[0]], [" ".join(self.y[idx])])[0]
@@ -134,7 +137,7 @@ class LLMEnv_batch_version(nn.Module):
         state = self.collate.state_templete(
             self.x[idx],
             self.cat_response(self.response_cache[idx][-self.history_len:]),
-            [self.action_verb[i] for i in self.action_history[idx]],
+            [self.action_verb[i] for i in self.action_history[idx][-self.history_len:]],
             self.d_t[idx]
         )
         return state
@@ -149,15 +152,19 @@ class LLMEnv_batch_version(nn.Module):
         self.actions = actions.clone()
         for i, action in enumerate(actions):
             if not self.done[i]:
-                self.action_history[i].append(action)
                 if action == 0:  # Retrieve Document
                     if self.last_action[i] != 0:
                         retrieve_indices.append(i)
                 elif action == 1:  # Proceed Response
                     if self.n[i] + 1 < len(self.y[i]):
+                        # if self.response_cache[i][-1] is not None and self.eos_id in self.response_cache[i][-1]:
+                        #     self.done[i] = True
+                        #     pass
+                        # else:
                         self.n[i] += 1
                         self.last_proceed[i] = self.steps[i]
                         proceed_indices.append(i)
+                        
                     else:
                         self.done[i]=True
                         self.actions[i]=-1
@@ -165,6 +172,7 @@ class LLMEnv_batch_version(nn.Module):
                     if self.n[i] > -1:
                         self.response_cache[i].pop()
                         rewrite_indices.append(i)
+                self.action_history[i].append(action)
 
         # Process Retrieve Document actions
         
@@ -185,7 +193,7 @@ class LLMEnv_batch_version(nn.Module):
                 self.response_cache[i].append(self.hat_y_t[i])
 
         for i in range(self.batch_size):
-            if self.steps[i]>4*len(self.y[i])+5:
+            if self.steps[i]>3*len(self.y[i])+3:
                 self.done[i]=True
         rewards = self.compute_reward()
         for i in range(self.batch_size):
@@ -193,13 +201,13 @@ class LLMEnv_batch_version(nn.Module):
         for i in range(self.batch_size):
             next_states.append(self.get_state(i))
             self.steps[i] += 1
-        self.last_action = actions.clone()
+        self.last_action = self.actions.clone()
 
         return next_states, rewards, self.done, {}
 
 
     def generation_quality(self, idx):
-        return 1.0*self.probs[idx].exp().mean() + 0.1*self.probs_halulu[idx].exp().mean()
+        return 1.0*self.probs[idx].mean().exp() + 0.1*self.probs_halulu[idx].mean().exp()
     
     def retrieval_quality(self, idx):
         return self.metric.BLEU_1_score([self.ret.tokenizer.decode(self.d_t[idx], skip_special_tokens=True)], [" ".join(self.y[idx])])[0]
@@ -217,28 +225,28 @@ class LLMEnv_batch_version(nn.Module):
                     refs.append(" ".join(self.y[idx]))
                     bert_idx.append(idx)
                     rewards[idx] += - self.basic_reward[idx]
-                    rewards[idx] += 0.1 * ((self.n[idx] + 1) / len(self.y[idx])) ** 2
                     rewards[idx] = float(rewards[idx])
                     
                         
             elif self.actions[idx] == 0:
                 # retrieval score
-                if self.action_history[idx][-1]!=0 and self.action_history[idx].count(0)<len(self.y[idx]):
-                    rewards[idx] += 0.15*self.retrieval_quality(idx) / len(self.y[idx])
-                if self.action_history[idx][-1]==0:
+                if self.last_action[idx] != 0 and self.action_history[idx].count(0)<len(self.y[idx]):
+                    rewards[idx] += 0.1*self.retrieval_quality(idx) / len(self.y[idx])
+                if self.last_action[idx]==0:
                     rewards[idx] -= 0.005
             elif self.actions[idx] == 1:
                 temp = self.generation_quality(idx)
-                rewards[idx] += 0.1*temp/len(self.y[idx])
+                rewards[idx] += 0.05*temp/len(self.y[idx])
+                rewards[idx] += 0.05 * 1/ len(self.y[idx])
                 self.previous_generation_quality[idx] = temp
                 
             elif self.actions[idx] == 2:
                 if self.n[idx] > -1:
                     temp = self.generation_quality(idx)
-                    rewards[idx] += 2*max(temp - self.previous_generation_quality[idx], 0) / len(self.y[idx])-0.0005
+                    rewards[idx] += 0.05*max(temp - self.previous_generation_quality[idx], 0) / len(self.y[idx])
                     self.previous_generation_quality[idx] = temp
                 else:
-                    rewards[idx] -= 0.05
+                    rewards[idx] -= 0.01
         
         if cands:
             bert = self.metric.Bert_score(cands, refs)
@@ -246,6 +254,7 @@ class LLMEnv_batch_version(nn.Module):
                 rewards[idx] += bert[i]
             
         for idx in range(self.batch_size):
+            rewards[idx] = float(rewards[idx])
             if rewards[idx]!=rewards[idx]:
                 print("reward NAN!!")
                 self.done[idx] = True
@@ -257,17 +266,18 @@ class LLMEnv_batch_version(nn.Module):
     def construct_query(self, idx):
         return self.x[idx] + self.cat_response(self.response_cache[idx][-self.history_len:])
 
-    def cat_response(self, cache: list[Tensor]) -> str:
+    def cat_response(self, cache: list[Tensor], skip_special_tokens=False) -> str:
         if cache[0] is None:
             cache = cache[1:]
         if len(cache) == 0:
             return ""
-        s = self.LM.tokenizer.decode(torch.cat(cache), skip_special_tokens=True)
+        s = self.LM.tokenizer.decode(torch.cat(cache), skip_special_tokens=skip_special_tokens)
         return s
 
     def get_next_response(self, indices):
-        response = [self.cat_response(self.response_cache[i]) for i in indices]
-        messages = [" According to the knowledge provided. ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
+        # response = [self.cat_response(self.response_cache[i]) for i in indices]
+        response = [" ".join(self.y[i][:self.n[i]]) for i in indices]
+        messages = [" According to the knowledge provided, ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
         answers = [self.y[i][self.n[i]] for i in indices]
         # d_t = torch.stack([self.d_t[i] for i in indices])#need to padding
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
@@ -298,19 +308,26 @@ class LLMEnv_test(LLMEnv_batch_version):
         self.actions = actions.clone()
         for i, action in enumerate(actions):
             if not self.done[i]:
-                self.action_history[i].append(action)
+                if self.steps[i] >20:
+                    action = 1
+                    self.actions[i]=1
                 if action == 0:  # Retrieve Document
                     if self.last_action[i] != 0:
                         retrieve_indices.append(i)
-                elif action == 1:  # Proceed Response
+                    else:
+                        action=1
+                        self.actions[i]=1
+                if action == 1:  # Proceed Response
                     if self.hat_y_t[i] is not None and self.eos_id in self.hat_y_t[i]:
                         self.done[i] = True
                         continue
+                    self.n[i] += 1
                     proceed_indices.append(i)
                 elif action == 2:  # Rewrite Current Response
                     if self.n[i] > -1:
                         self.response_cache[i].pop()
                         rewrite_indices.append(i)
+                self.action_history[i].append(action)
 
         # Process Retrieve Document actions
         
@@ -334,7 +351,7 @@ class LLMEnv_test(LLMEnv_batch_version):
             self.steps[i] += 1
             if sum(map(len, self.response_cache[i][1:]))>=256:
                 self.done[i]=True
-        self.last_action = actions.clone()
+        self.last_action = self.actions.clone()
 
         return next_states, rewards, self.done, {}
 
@@ -343,7 +360,7 @@ class LLMEnv_test(LLMEnv_batch_version):
     
     def get_next_response(self, indices):
         response = [self.cat_response(self.response_cache[i]) for i in indices]
-        messages = [" According to the knowledge provided. ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
+        messages = [" According to the knowledge provided, ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
         doc_token = self.ret.tokenizer(d_t, return_tensors="pt", padding=True).to(self.LM.device)
         if self.step_size>64:
@@ -355,7 +372,7 @@ class LLMEnv_test(LLMEnv_batch_version):
 class Orginal_Env(LLMEnv_test):
     def get_next_response(self, indices):
         response = [self.cat_response(self.response_cache[i]) for i in indices]
-        messages = [" According to the knowledge provided. ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
+        messages = [" According to the knowledge provided, ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
         messages = [messages[j][:57]+ d_t[j]+ messages[j][57:] for j in range(len(messages))]
         responses = self.LM.generate(messages, Doc_tokens=None, max_new_tokens=self.step_size, decode=False)
@@ -454,8 +471,7 @@ class PPOTrainer:
         surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages  # Shape: (batch_size,)
         actor_loss = -torch.min(surr1, surr2).mean()  # Shape: scalar
 
-
-        critic_loss = F.huber_loss(values, returns, "mean", 1.0)  # Shape: scalar
+        critic_loss = F.smooth_l1_loss(values, returns, reduction = "mean", beta = 0.1)  # Shape: scalar
         action_entropy:Tensor = action_dist.entropy().mean() #scalar
         log_p_mean = new_action_logp
         return actor_loss, critic_loss, log_p_mean  # Shape: scalar
@@ -498,7 +514,7 @@ class PPOTrainer:
         torch.save(returns, "save/return.pt")
         torch.save(values, "save/value.pt")
         advantages = returns - values  # Shape: (memory_size,)
-        advantages = F.normalize(advantages, dim=0)
+        advantages = (advantages - advantages.mean())/(advantages.std() + 1e-8)
         return [*zip(old_states, old_actions, old_log_probs, returns, advantages)]
     
     def update(self, memory, loader=None): 

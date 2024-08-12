@@ -55,7 +55,7 @@ class collateLM():
 
 
 class collate():
-    def __init__(self, LM_dir = LM_dir, bert_dir = bert_dir):
+    def __init__(self, LM_dir = LM_dir, bert_dir = bert_dir, max_length=256):
         
         self.datatokenizer:PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(bert_dir)
         self.LMtokenizer = AutoTokenizer.from_pretrained(
@@ -63,13 +63,14 @@ class collate():
             token='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')
         self.LMtokenizer.pad_token = self.LMtokenizer.eos_token
         self.eos_token = self.LMtokenizer.eos_token
+        self.max_length = max_length
     def prepare_QA_token(self, texts:list[str], targets:list[str]):
         
-        unlabel_str, label = zip(*[self.templete(q, a) for q,a in zip(texts, targets)])
+        unlabel_str, label = zip(*[self.templete(q, a if isinstance(a, str) else a[0]) for q,a in zip(texts, targets)])
         cat_qa = [q+" "+a+self.eos_token for q, a in zip(unlabel_str, label)]
-        unlabel = self.LMtokenizer(text=unlabel_str).input_ids
+        unlabel = self.LMtokenizer(text=unlabel_str, add_special_tokens =False).input_ids
         # print(max([len(s) for s in unlabel]))
-        tokens = self.LMtokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=256, truncation =True,)
+        tokens = self.LMtokenizer(text=cat_qa, text_target = cat_qa,  return_tensors='pt', padding=True, max_length=self.max_length, truncation =True, add_special_tokens =False)
         
         for i in range(len(texts)):
             tokens['labels'][i, :len(unlabel[i])]=-100
@@ -102,8 +103,14 @@ class collate():
     def templete(self, query:str, answer:str ='')->tuple[str]:
         Role = ["system", "user", "assistant"]
         query, answer = query.strip(), answer.strip()
+        if len(answer)<=40:
+            form = "very short"
+        elif len(answer)>=200:
+            form = "very long"
+        else:
+            form = ""
         messages = [
-            {"role": "system", "content": "This is the searched knowledge: [KNOW]  [/KNOW] Please answer user questions based on the above knowledge\n"},
+            {"role": "system", "content": f"<knowledge>  </knowledge> Please provide a {form} answer based on knowledge"},
             {"role": "user", "content": query}
         ]
         prompt = self.LMtokenizer.apply_chat_template(

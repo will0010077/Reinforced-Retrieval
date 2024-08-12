@@ -45,7 +45,7 @@ def training(rank, world_size, max_epoch, model, dataset, port):
     print(f"Running DDP on rank {rank}.")
     setup(rank, world_size, port)
     start, end = int(len(dataset)*rank/world_size), int(len(dataset)*(rank+1)/world_size)
-    loader = DataLoader(dataset[start: end], batch_size=16, shuffle=True, num_workers=1, collate_fn=collate(LM_dir, bert_dir).collate_qa_docs, persistent_workers=True)
+    loader = DataLoader(dataset[start: end], batch_size=32, shuffle=True, num_workers=1, collate_fn=collate(LM_dir, bert_dir, max_length=128).collate_qa_docs, persistent_workers=True)
 
     bs = loader.batch_size
     model = model.to(rank)
@@ -98,7 +98,7 @@ def training(rank, world_size, max_epoch, model, dataset, port):
         stream.synchronize()
         dist.barrier()
         if rank==0:
-            torch.save(model.module.state_dict(), f"save/EncLM_{epoch}.pt")
+            torch.save(model.module.state_dict(), f"save/TV_EncLM_{epoch}.pt")
             torch.save(optim.state_dict(), "save/EncLM_optim.pt")
         dist.barrier()
         
@@ -126,11 +126,11 @@ def main():
     if True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        LM.load_state_dict(torch.load("save/EncLM_5.pt", map_location='cpu'))
+        LM.load_state_dict(torch.load("save/TV_EncLM_1.pt", map_location='cpu'))
     max_epoch = 10
     print('Loading dataset...')
-    data_path = "data/train_QAD.jsonl"
-    dataset = PretrainEnc(data_path=data_path, use_doc=True, use_short=False, use_long=True, num_samples = None)
+    data_path = "data/TV_train_QAD.jsonl"
+    dataset = PretrainEnc(data_path=data_path, use_doc=True, use_short=True, use_long=False, num_samples = None)
     dataset = [*dataset]
 
     with socket() as s:

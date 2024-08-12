@@ -1,5 +1,6 @@
 import os
 import sys
+os.environ["CUDA_VISIBLE_DEVICES"] ="1"
 
 import torch
 import json
@@ -25,20 +26,33 @@ if __name__=="__main__":
         else:
             s= s.split(",")
             s = [int(i) for i in s]
-            
-    
+        
+        data_select = input("dataset:\n0)Natural Question\n1)Trivia\n>")
+        data_select=int(data_select)
+        data_name = ["NQ", "TV"]
+        assert data_select==0 or data_select==1
     if runall or 0 in s:
         
-        data_path='data/v1.0-simplified_simplified-nq-train.jsonl'
-        dataset.cleandata(data_path, "data/cleandata_with_doc.jsonl")
+        if data_select==0:
+            data_path='data/v1.0-simplified_simplified-nq-train.jsonl'
+            data = dataset.cleanDataset(data_path=data_path,num_samples=None)
+        elif data_select==1:
+            data = dataset.trivia_qadatast("train")
+        dataset.cleandata(data, f"data/{data_name[data_select]}_train.jsonl")
         
-        data_path = 'data/v1.0-simplified_nq-dev-all.jsonl'
-        dataset.cleandata(data_path, "data/dev_with_doc.jsonl")
+        if data_select==0:
+            data_path = 'data/v1.0-simplified_nq-dev-all.jsonl'
+            data = dataset.cleanDataset(data_path=data_path,num_samples=None)
+        elif data_select==1:
+            data = dataset.trivia_qadatast("valid")
+        dataset.cleandata(data, f"data/{data_name[data_select]}_test.jsonl")
+
+
     if runall or 1 in s:
         
             
         print('Loading dataset...')
-        data_path='data/cleandata_with_doc.jsonl'
+        data_path = f"data/{data_name[data_select]}_train.jsonl"
         train_data = dataset.NQADataset(data_path=data_path,  num_samples=None, use_long=True, use_short=True, use_doc=True)
         collate = collate_func.collate()
         
@@ -48,7 +62,7 @@ if __name__=="__main__":
         lex_MAE_retriver.to(device)
         lex_MAE_retriver.model.load_state_dict(torch.load('save/LEX_MAE_retriever904.pt', map_location='cpu')['enc_model_state_dict'], assign=False)
         
-        file = open("data/train_QAD.jsonl", "w")
+        file = open(f"data/{data_name[data_select]}_train_QAD.jsonl", "w")
         for i, (q, la, a, d) in tqdm(enumerate(train_data), total=len(train_data), ncols=0, smoothing=0.05):
             d = generate_segments(d, 96, 64)
             input_ids = []

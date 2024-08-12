@@ -158,20 +158,33 @@ class LLaMa_reader(torch.nn.Module):
         loss=None
 
         labels = tokens.get('labels', None)
+        
+        loss = None
         if labels is not None:
-            del tokens['labels']
             # Shift so that tokens < n predict n
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = torch.nn.CrossEntropyLoss()
+            shift_logits = shift_logits.view(-1, self.config.vocab_size)
+            shift_labels = shift_labels.view(-1)
+            # Enable model parallelism
+            shift_labels = shift_labels.to(shift_logits.device)
+            loss = loss_fct(shift_logits, shift_labels)
+        # if labels is not None:
+        #     del tokens['labels']
+        #     # Shift so that tokens < n predict n
 
-            logp = torch.log_softmax(lm_logits, dim=-1)
-            shift_logp = logp[..., :-1, :]
-            labels[tokens['attention_mask']==0]=-100
-            shift_labels = labels[..., 1:]
+        #     logp = torch.log_softmax(lm_logits, dim=-1)
+        #     shift_logp = logp[..., :-1, :]
+        #     labels[tokens['attention_mask']==0]=-100
+        #     shift_labels = labels[..., 1:]
             
-            loss = -shift_logp[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
-            mask = shift_labels==-100
-            loss = loss.masked_fill_(mask, 0)
+        #     loss = -shift_logp[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
+        #     mask = shift_labels==-100
+        #     loss = loss.masked_fill_(mask, 0)
             
-            loss = loss.sum(-1)/(~mask).sum(-1)
+        #     loss = loss.sum(-1)/(~mask).sum(-1)
 
         
         return lm_logits, loss

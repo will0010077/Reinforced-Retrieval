@@ -39,15 +39,16 @@ if __name__=="__main__":
     
     
     print('Loading dataset...')
-    data_path='data/dev_with_doc.jsonl'
-    num_testing=200
-    dataset=NQADataset(data_path=data_path, num_samples=1000, use_doc=True)
+    data_path='data/cleandata_with_doc.jsonl'
+    num_testing=64
+    dataset=NQADataset(data_path=data_path, num_samples=18, use_doc=True)
+    dataset = [*dataset]*64
     
-    Enc=True
-    Policy=True
+    Enc=False
+    Policy=False
     print('Loading LLM')
     generate_config = config.generate_config
-    generate_config.temperature=0.2
+    generate_config.temperature=1
     if not Policy:
         generate_config.do_sample=False
     LM = LLaMa_reader(LM_dir, device, token = token, from_pretrained=True, generate_config=generate_config)
@@ -82,7 +83,7 @@ if __name__=="__main__":
     num_neg=16
     num_RL_update = 8
 
-    env_bs=8
+    env_bs=16
     if Enc:
         env = LLMEnv_test(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs, shuffle=False, step_size=15 if Policy else 256)
     else:
@@ -115,8 +116,9 @@ if __name__=="__main__":
         for i in range(env_bs):
             if done[i]:
                 q_list.append(env.x[i])
-                a_list.append(env.cat_response(env.response_cache[i]))
+                a_list.append(env.cat_response(env.response_cache[i], True))
                 true_list.append(" ".join(env.y[i]))
+                # print(a_list[-1], "\n", true_list[-1])
                 episode+=1
                 state[i] = env.reset(i)  # Shape: string
                 done[i]=False
@@ -126,15 +128,14 @@ if __name__=="__main__":
             with torch.no_grad():
                 action_logits, state_value = agent(state)  # token_logits:(B, num, vocab), action_logits shape: (B, action_space_size), state_value shape: (B,)
             action_logits, state_value = action_logits.cpu(), state_value.cpu()
-            action_logits[:,1]-=0.5
+            action_logits[:,1]-=0.3
             action_dist = Categorical(logits = action_logits/0.1)
             action = action_dist.sample()  # Shape: (B,)
             if not Policy:
                 action[:]=1
-            print(action[0].item(), end='', flush=True)
-            
             next_state, reward, done, _ = env.step(action)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
-            # print(env.cat_response(env.response_cache))
+            print(action[0].item(), end='', flush=True)
+            # print(env.cat_response(env.response_cache[0]))
             state = next_state
             
             
@@ -155,7 +156,7 @@ if __name__=="__main__":
         for i in range(env_bs):
             if done[i]:
                 q_list2.append(env.x[i])
-                a_list2.append(env.cat_response(env.response_cache[i]))
+                a_list2.append(env.cat_response(env.response_cache[i], True))
                 true_list2.append(" ".join(env.y[i]))
                 episode+=1
                 state[i] = env.reset(i)  # Shape: string
@@ -186,25 +187,25 @@ if __name__=="__main__":
     bleu2 = metric_c.BLEU_1_score(a_list2, true_list2)
     inlist = []
     for j in range(len(q_list)):
-        for i in range(len(q_list2)):
+        for i in filter(lambda x:x not in inlist, range(len(q_list2))):
             if q_list2[i] == q_list[j]:
                 break
         inlist.append(i)
         f.write(
 f'''Prompt: {q_list[j]}\nGround truth: {true_list[j]}
-[{bleu[j]:.3f}, {R_1[j]:.3f}, {R_2[j]:.3f}, {R_L[j]:.3f}, {bert[j]:.3f}] Agent refined response: {a_list[j]}
-[{bleu2[i]:.3f}, {R_12[i]:.3f}, {R_22[i]:.3f}, {R_L2[i]:.3f}, {bert2[i]:.3f}] Ori response: {a_list2[i]}
+[{bleu[j]*100:5.2f}, {R_1[j]*100:5.2f}, {R_2[j]*100:5.2f}, {R_L[j]*100:5.2f}, {bert[j]*100:5.2f}] Agent refined response: {a_list[j]}
+[{bleu2[i]*100:5.2f}, {R_12[i]*100:5.2f}, {R_22[i]*100:5.2f}, {R_L2[i]*100:5.2f}, {bert2[i]*100:5.2f}] Ori response: {a_list2[i]}
 ''' +"="*80+"\n")
         
     f.write(f"Enc:{Enc}, Policy:{Policy}\n")
-    f.write(f"BLEU_1: {sum(bleu)/len(bleu)*100:05.2f}\n")
-    f.write(f"ROUGE-1: {sum(R_1)/len(R_1)*100:05.2f}\n")
-    f.write(f"ROUGE-2: {sum(R_2)/len(R_2)*100:05.2f}\n")
-    f.write(f"ROUGE-L: {sum(R_L)/len(R_L)*100:05.2f}\n")
-    f.write(f"BERT: {sum(bert)/len(bert)*100:05.2f}\n")
+    f.write(f"BLEU_1: {sum(bleu)/len(bleu)*100:5.2f}\n")
+    f.write(f"ROUGE-1: {sum(R_1)/len(R_1)*100:5.2f}\n")
+    f.write(f"ROUGE-2: {sum(R_2)/len(R_2)*100:5.2f}\n")
+    f.write(f"ROUGE-L: {sum(R_L)/len(R_L)*100:5.2f}\n")
+    f.write(f"BERT: {sum(bert)/len(bert)*100:5.2f}\n")
     f.write(f"Without Policy\n")
-    f.write(f"BLEU_1: {sum([bleu2[i] for i in inlist])/len(inlist)*100:05.2f}\n")
-    f.write(f"ROUGE-1: {sum([R_12[i] for i in inlist])/len(inlist)*100:05.2f}\n")
-    f.write(f"ROUGE-2: {sum([R_22[i] for i in inlist])/len(inlist)*100:05.2f}\n")
-    f.write(f"ROUGE-L: {sum([R_L2[i] for i in inlist])/len(inlist)*100:05.2f}\n")
-    f.write(f"BERT: {sum([bert2[i] for i in inlist])/len(inlist)*100:05.2f}\n")
+    f.write(f"BLEU_1: {sum([bleu2[i] for i in inlist])/len(inlist)*100:5.2f}\n")
+    f.write(f"ROUGE-1: {sum([R_12[i] for i in inlist])/len(inlist)*100:5.2f}\n")
+    f.write(f"ROUGE-2: {sum([R_22[i] for i in inlist])/len(inlist)*100:5.2f}\n")
+    f.write(f"ROUGE-L: {sum([R_L2[i] for i in inlist])/len(inlist)*100:5.2f}\n")
+    f.write(f"BERT: {sum([bert2[i] for i in inlist])/len(inlist)*100:5.2f}\n")

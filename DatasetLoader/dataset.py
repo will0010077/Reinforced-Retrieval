@@ -11,8 +11,29 @@ import multiprocessing
 from queue import Queue
 import time,os,gc
 import re
+from datasets import load_dataset
+
 tokenizer = AutoTokenizer.from_pretrained("facebook/contriever")
 
+
+class LazySlice:
+    def __init__(self, parent, slice_obj):
+        self.parent = parent
+        self.slice_obj = slice_obj
+        self.indices = range(*slice_obj.indices(len(self.parent.dataset)))
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            return LazySlice(self.parent, slice(self.indices[idx].start, self.indices[idx].stop, self.indices[idx].step))
+        return self.parent[self.indices[idx]]
+
+    def __iter__(self):
+        for idx in self.indices:
+            yield self.parent[idx]
+
+    def __len__(self):
+        return len(self.indices)
+    
 def write_segment(f, s2c:Queue, qlock:Lock, flock:Lock, event:Event):
     buffer_size = 16
     while True:
@@ -170,12 +191,14 @@ class NQADataset(Dataset):
                 if not self.use_doc:
                     del line["document"]
                 if self.use_long and line["long_answer"]:
-                    if len(line["long_answer"])>900 or len(line["long_answer"])<3:
+                    if len(line["long_answer"])>1000 or len(line["long_answer"])<3:
                         skip+=1
                         continue
                     data.append(line)
-                elif not self.use_long and line["short_answers"]:
+                elif self.use_short and line["short_answers"] and len(line["short_answers"][0])>0 :
                     data.append(line)
+                else:
+                    skip+=1
         print("skip:",skip)
         return data
 
@@ -213,7 +236,8 @@ def text_normal(text):
     if isinstance(text, tuple):
         return tuple(map(text_normal, text))
 
-    assert isinstance(text, str)
+    if not isinstance(text, str):
+        return text
     text = text.strip()
     text=re.sub("(<[^<>]{1,20}>)", '', text)
     text = re.sub(" +", " ", text)
@@ -401,14 +425,15 @@ class cleanDataset(Dataset):
         long_answer=' '.join(splited_doc[a['start_token']:a['end_token']])
         short_annotations=sample['annotations'][0]['short_answers']
         if short_annotations==[]:
-            return None,None,None,None
-        if type(short_annotations)==dict:
-            short_annotations=[short_annotations]
+            answers = []
+        else:
+            if type(short_annotations)==dict:
+                short_annotations=[short_annotations]
 
-        answers=[]
-        for i in range(len(short_annotations)):
-            answer=' '.join(splited_doc[short_annotations[i]['start_token']:short_annotations[i]['end_token']])
-            answers.append(answer)
+            answers=[]
+            for i in range(len(short_annotations)):
+                answer=' '.join(splited_doc[short_annotations[i]['start_token']:short_annotations[i]['end_token']])
+                answers.append(answer)
         # print(answers)
         # print(len(sample['question_text']))
         # document = document.split("References (edit) Jump up ^")[0]
@@ -459,8 +484,55 @@ class DocumentDatasets():
         #return DocumentLeng
         return sum(self.file_len)
 
-def cleandata(datapath, outpath):
-    dataset=cleanDataset(data_path=datapath,num_samples=None)
+
+class trivia_qadatast:
+    def __init__(self, split = "train"):
+        self.dataset = load_dataset("mandarjoshi/trivia_qa", "rc.wikipedia")
+        if split=="train":
+            self.dataset = self.dataset["train"]
+        elif split =="test":
+            self.dataset = self.dataset["test"]
+        elif split =="valid":
+            self.dataset = self.dataset["validation"]
+    def __getitem__(self, ids):
+        
+        if isinstance(ids, slice):
+            return LazySlice(self, ids)
+        #     return lambda x: self.__getitem__(range(ids.start, ids.stop, ids.step)[x])
+        #['question', 'question_id', 'question_source', 'entity_pages', 'search_results', 'answer']
+        #question=q, short_answers=ans, long_answer=la, document = d
+        answer = [self.dataset[ids]["answer"]["value"] ]+ self.dataset[ids]["answer"]["aliases"]
+        return text_normal([answer, None, "\n".join(self.dataset[ids]["entity_pages"]["wiki_context"]), self.dataset[ids]['question']])
+    def __len__(self,):
+        return len(self.dataset)
+
+def cleandata(dataset, outpath):
+
+    num_data=0
+    total_a_lenth=[]
+    file = open(outpath, 'w')
+    for i in tqdm(range(len(dataset)), ncols=0):
+        ans, la, d, q=dataset[i]
+        if ans:
+            for a in ans:
+                if len(a.split())>10:
+                    ans.remove(a)
+                    continue
+                total_a_lenth.append(len(a.split()))
+        if ans or la:
+            if la and len(la)>3000:
+                continue
+            json.dump(dict(question=q, short_answers=ans, long_answer=la, document = d), file)
+            file.write('\n')
+            num_data+=1
+    file.close()
+
+    print(sum(total_a_lenth)/len(total_a_lenth))
+    print(max(total_a_lenth))
+    print('total:',num_data)#98708
+
+def cleandata_trivia(outpath):
+    dataset=trivia_qadatast()
 
     num_data=0
     total_a_lenth=[]
@@ -486,6 +558,7 @@ def cleandata(datapath, outpath):
     print('total:',num_data)#98708
 
 
-
 if __name__=="__main__":
-    cleandata()
+    d = trivia_qadatast()[10:]
+    for i  in range(3):
+        print(d[i][0][0])
