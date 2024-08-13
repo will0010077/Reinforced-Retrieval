@@ -41,7 +41,7 @@ def setup(rank, world_size, port):
 def cleanup():
     dist.destroy_process_group()
 
-def training(rank, world_size, max_epoch, model, dataset, collate_fn, port):
+def training(rank, world_size, start_epoch, max_epoch, model, dataset, collate_fn, port):
     print(f"Running DDP on rank {rank}.")
     setup(rank, world_size, port)
     start, end = int(len(dataset)*rank/world_size), int(len(dataset)*(rank+1)/world_size)
@@ -54,7 +54,7 @@ def training(rank, world_size, max_epoch, model, dataset, collate_fn, port):
     Enc_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_" not in n]
     Prefix_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_" in n]
     optim = torch.optim.AdamW([{"params":Enc_param_list, "lr":enc_config.enc_lr}, {"params":Prefix_param_list, "lr":enc_config.prefix_lr, "weight_decay": 0.02}], betas = train_config.betas) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
-    optim.load_state_dict(torch.load("save/EncLM_optim.pt", map_location="cpu"))
+    # optim.load_state_dict(torch.load("save/EncLM_optim.pt", map_location="cpu"))
     iter_step = len(loader)*max_epoch
     warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.01))
     decay =  torch.optim.lr_scheduler.PolynomialLR(optim, total_iters=int(iter_step*1.3), power=1.5)
@@ -63,7 +63,7 @@ def training(rank, world_size, max_epoch, model, dataset, collate_fn, port):
     ma_loss=2
     stream = torch.cuda.current_stream(rank)
     optim.zero_grad()
-    for epoch in range(max_epoch):
+    for epoch in range(start_epoch, start_epoch+max_epoch):
         if rank==0:
             train_bar=tqdm(loader, ncols=0)
         else:
@@ -78,7 +78,7 @@ def training(rank, world_size, max_epoch, model, dataset, collate_fn, port):
             if not train_config.use_prefix:
                 d_tokens = None
             
-            ref_logp, (LM_output, loss) = model.forward(qa_tokens, Doc_tokens = d_tokens, stages = epoch)
+            ref_logp, (LM_output, loss) = model.forward(qa_tokens, Doc_tokens = d_tokens, stage = int(epoch>=1))
             # kl = F.kl_div(LM_output, ref_logp, log_target=True, reduction="batchmean")
             loss = loss.mean()
             # loss += kl.mean() * 0.1
@@ -120,17 +120,19 @@ def main():
     print(f'Initialize EncTunedLM...')
     peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=32, adapter_len=1)}
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
-    if True:
+    if False:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        LM.load_state_dict(torch.load("save/TV_EncLM_8.pt", map_location='cpu'))
-    max_epoch = 10
+        LM.load_state_dict(torch.load("save/TV_EncLM_2.pt", map_location='cpu'), strict=True)
+        
+    start_epoch = 0
+    max_epoch = 10 # update epoch, not end epoch
     print('Loading dataset...')
     
     if True:
         data_path = "data/TV_train_QAD.jsonl"
         dataset = PretrainEnc(data_path=data_path, use_doc=True, use_short=True, use_long=False, num_samples = None)
-        # dataset = [*dataset]*2**6
+        # dataset = [*dataset]*2**8
         length = 128
     else:
         data_path = "data/NQ_train_QAD.jsonl"
@@ -143,7 +145,7 @@ def main():
         s.bind(('', 0))
         port = s.getsockname()[1]
     mp.spawn(training,
-        args=(world_size, max_epoch, LM, dataset, collate_fn, port),
+        args=(world_size, start_epoch, max_epoch, LM, dataset, collate_fn, port),
         nprocs=world_size,
         join=True)
         

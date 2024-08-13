@@ -5,6 +5,7 @@ sys.path.append("../")
 import torch
 
 from torch import nn, Tensor
+import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel, BertConfig, BertModel
 import config
 
@@ -27,20 +28,25 @@ class KnowEncoder(torch.nn.Module):
         self.num_prefix = num_prefix
         self.dims=dims
         self.dtype=dtype
-        self.encoder_heads= nn.Linear(enc_size_config['hidden_size'], self.dims)
         
+        # Linear layer to project the output of the attention layer to the desired dimension
+        self.proj_layer = nn.Linear(enc_size_config['hidden_size'], self.dims)
+        # Adaption prompt as before
         self.adaption_prompt = nn.Parameter(
             torch.empty(self.num_layers, self.num_prefix, self.dims, device=self.model.device, dtype=self.dtype).normal_()
         )#(layer, P, d)
-        assert num_prefix<999-104
-        self.register_buffer('prefix_tokens', torch.arange(104, 104+64).unsqueeze_(0), persistent=False)#(1,P)
-        self.prefix_tokens:Tensor
-    def forward(self, x, k=1, device = None, stages = 1)->tuple[torch.Tensor]:
+        self.enc_len = 32
+        self.pooling_drop = 0.1
+        self.querys = nn.Parameter(
+            torch.empty(self.enc_len, self.dims, device=self.model.device, dtype=self.dtype).normal_()
+        )
+        
+    def forward(self, x, k=1, device = None, stage = 1)->tuple[torch.Tensor]:
         '''
         x: (B*k, n)
         output: (layer, B, k*P, dims)
         '''
-        if stages==0:
+        if stage==0:
             return  (None,)+ (None,)*(32-self.num_layers-1) + self.adaption_prompt.unsqueeze(1).unbind()
         if device is None:
             device = self.model.device
@@ -53,23 +59,25 @@ class KnowEncoder(torch.nn.Module):
 
 
         # cat special token for output fixed length of embedding, update attention mask length
-        input_ids = torch.cat([self.prefix_tokens.tile([B*k,1]), x.input_ids], dim = 1)[:,:512]
-        attention_mask = torch.cat([torch.ones([B*k, self.prefix_tokens.shape[1]], device = x.input_ids.device), x.attention_mask], dim = 1)[:,:512]
+        input_ids = x.input_ids[:,:512]
+        attention_mask = x.attention_mask[:,:512]
 
 
         y=self.model(input_ids =input_ids, attention_mask = attention_mask)
         
         
-        y = y.last_hidden_state[:,:self.prefix_tokens.shape[1],:]#(B*k, P, d)
-        y = self.encoder_heads.forward(y)#(B*k, P, dim)
+        y = y.last_hidden_state#(B*k, N, d)
+        y = self.proj_layer.forward(y)#(B*k, N, dim)
+        attention_mask  = attention_mask[:,None,:].bool()# (B,N) -> (B, LQ, N)
+        y = F.scaled_dot_product_attention(self.querys, y, y, attn_mask = attention_mask,  dropout_p=(self.pooling_drop if self.training else 0.0)) #(B, Qlen, dim)
         # print('encoder_heads output:', y.shape)
         y = y.to(self.dtype)
-        y = y.reshape([B, k, self.prefix_tokens.shape[1], self.dims, ])#(B, k, P, dim)
+        y = y.reshape([B, k, self.enc_len, self.dims, ])#(B, k, P, dim)
         # print('prefix output:', y.shape)
         
         
         # print('before cat output:', y.shape)
-        y = y.reshape([B, k*self.prefix_tokens.shape[1], self.dims])#(B, k*P, dims)
+        y = y.reshape([B, k*self.enc_len, self.dims])#(B, k*P, dims)
         y = y.to(device, non_blocking=True)
         # static prefix + Enc prefix
         return  (y,)+ (None,)*(32-self.num_layers-1) + self.adaption_prompt.detach().unsqueeze(1).unbind()

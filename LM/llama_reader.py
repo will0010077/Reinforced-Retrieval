@@ -207,7 +207,7 @@ class LLaMa_reader(torch.nn.Module):
         
         # self.model.generation_config.stop_strings.extend(stop_strings)
         outputs = self.model.generate(**tokens,
-                                        **self.generate_config,
+                                      **self.generate_config,
                                         streamer=streamer,
                                         max_new_tokens=max_new_tokens,
                                         # tokenizer = self.tokenizer,
@@ -276,10 +276,10 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
         self._mark_only_adaption_prompts_as_trainable(self.model)
         self.module_name = prepare_config(peft.AdaptionPromptConfig, self.model).target_modules
 
-    def forward(self, *args, Doc_tokens = None, k = 1, use_ref = False, stages=1, **kwargs):
+    def forward(self, *args, Doc_tokens = None, k = 1, use_ref = False, stage=1, **kwargs):
 
         if Doc_tokens is not None:
-            prefix = self.Enc.forward(Doc_tokens, stages = stages)
+            prefix = self.Enc.forward(Doc_tokens, stage = stage)
         else:
             prefix = None
         self._set_prefix(prefix)

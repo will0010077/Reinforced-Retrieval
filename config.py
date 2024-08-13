@@ -1,8 +1,17 @@
+from typing import Any
+
+
 class Config(dict):
     def __init__(self, **entries):
         super().__init__(entries)
         self.__dict__.update(entries)
-        
+    def __setattr__(self, name: str, value: Any) -> None:
+        self.update({name: value})
+        return self.__dict__.update({name: value})
+    def __setitem__(self, key: Any, value: Any) -> None:
+        self.__dict__.update({key: value})
+        return super().__setitem__(key, value)
+
 train_config = Config(
     max_epoch=6,
     spilt=0.95,
@@ -24,8 +33,8 @@ ppo_config = Config(
     grad_step=1
 )
 enc_config = Config(
-    enc_lr=1.e-5,
-    prefix_lr=3e-4,
+    enc_lr=3.e-5,
+    prefix_lr=1e-4,
     num_layers=31,
     num_prefix=20
 )

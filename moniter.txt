@@ -14314,3 +14314,95 @@ ROUGE-1: 41.80
 ROUGE-2: 15.62
 ROUGE-L: 41.80
 BERT: 66.18
+Prompt: Which Lloyd Webber musical premiered in the US on 10th December 1993?
+Ground truth: sunset boulevard
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: sunset boulevard
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: sunset boulevard
+================================================================================
+Prompt: Who was the next British Prime Minister after Arthur Balfour?
+Ground truth: campbell-bannerman
+[ 0.00,  0.00,  0.00,  0.00, 46.30] Agent refined response: david lloyd george
+[ 0.00,  0.00,  0.00,  0.00, 46.30] Ori response: david lloyd george
+================================================================================
+Prompt: Who had a 70s No 1 hit with Kiss You All Over?
+Ground truth: exile
+[ 0.00,  0.00,  0.00,  0.00, 44.03] Agent refined response: joe donovan
+[ 0.00,  0.00,  0.00,  0.00, 44.03] Ori response: joe donovan
+================================================================================
+Prompt: What claimed the life of singer Kathleen Ferrier?
+Ground truth: cancer
+[100.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: cancer
+[100.00, 100.00,  0.00, 100.00, 100.00] Ori response: cancer
+================================================================================
+Prompt: Which actress was voted Miss Greenwich Village in 1942?
+Ground truth: lauren bacall
+[ 0.00,  0.00,  0.00,  0.00, 44.04] Agent refined response: marilyn monroe
+[ 0.00,  0.00,  0.00,  0.00, 44.04] Ori response: marilyn monroe
+================================================================================
+Prompt: What was the name of Michael Jackson's autobiography written in 1988?
+Ground truth: moonwalk
+[ 0.00,  0.00,  0.00,  0.00, 78.52] Agent refined response: moonwalker
+[ 0.00,  0.00,  0.00,  0.00, 78.52] Ori response: moonwalker
+================================================================================
+Prompt: Which volcano in Tanzania is the highest mountain in Africa?
+Ground truth: kilimanjaro
+[100.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: kilimanjaro
+[100.00, 100.00,  0.00, 100.00, 100.00] Ori response: kilimanjaro
+================================================================================
+Prompt: The flag of Libya is a plain rectangle of which color?
+Ground truth: green
+[100.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: green
+[100.00, 100.00,  0.00, 100.00, 100.00] Ori response: green
+================================================================================
+Prompt: Of which African country is Niamey the capital?
+Ground truth: niger
+[100.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: niger
+[100.00, 100.00,  0.00, 100.00, 100.00] Ori response: niger
+================================================================================
+Prompt: Which musical featured the song The Street Where You Live?
+Ground truth: my fair lady
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: my fair lady
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: my fair lady
+================================================================================
+Prompt: "Who was the target of the failed ""Bomb Plot"" of 1944?"
+Ground truth: hitler
+[ 0.00,  0.00,  0.00,  0.00, 61.96] Agent refined response: winston churchill
+[ 0.00,  0.00,  0.00,  0.00, 61.96] Ori response: winston churchill
+================================================================================
+Prompt: Who had an 80s No 1 hit with Hold On To The Nights?
+Ground truth: richard marx
+[ 0.00,  0.00,  0.00,  0.00, 45.09] Agent refined response: george michael
+[ 0.00,  0.00,  0.00,  0.00, 45.09] Ori response: george michael
+================================================================================
+Prompt: Who directed the classic 30s western Stagecoach?
+Ground truth: john ford
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: john ford
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: john ford
+================================================================================
+Prompt: Dave Gilmore and Roger Waters were in which rock group?
+Ground truth: pink floyd
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: pink floyd
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: pink floyd
+================================================================================
+Prompt: Which highway was Revisited in a classic 60s album by Bob Dylan?
+Ground truth: 61
+[50.00, 66.67,  0.00, 66.67, 61.70] Agent refined response: 61 highway
+[50.00, 66.67,  0.00, 66.67, 61.70] Ori response: 61 highway
+================================================================================
+Prompt: Which was the only eastern bloc country to participate in the 1984 LA Olympics?
+Ground truth: rumania
+[ 0.00,  0.00,  0.00,  0.00, 37.91] Agent refined response: east germany
+[ 0.00,  0.00,  0.00,  0.00, 37.91] Ori response: east germany
+================================================================================
+Enc:True, Policy:False
+BLEU_1: 53.12
+ROUGE-1: 54.17
+ROUGE-2: 25.00
+ROUGE-L: 54.17
+BERT: 76.22
+Without Policy
+BLEU_1: 53.12
+ROUGE-1: 54.17
+ROUGE-2: 25.00
+ROUGE-L: 54.17
+BERT: 76.22

@@ -54,6 +54,7 @@ class LLMEnv_batch_version(nn.Module):
         
         self.x = [None] * self.batch_size
         self.y = [None] * self.batch_size
+        self.ground_truth = [None] * self.batch_size
         self.document = [None] * self.batch_size
         self.input_ids = [None] * self.batch_size
         self.attention_mask = [None] * self.batch_size
@@ -113,6 +114,7 @@ class LLMEnv_batch_version(nn.Module):
             self.current_data = self.dataset[self.current_index%len(self.dataset)]
         self.current_index+=1
         self.x[idx], self.y[idx], self.document[idx] = self.current_data
+        self.ground_truth[idx] = self.y[idx]
         if isinstance(self.y[idx],list):
             self.y[idx]=self.y[idx][0]
         self._build_embedding(idx)

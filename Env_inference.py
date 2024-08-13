@@ -39,7 +39,7 @@ if __name__=="__main__":
     
     
     print('Loading dataset...')
-    num_testing=64
+    num_testing=16
     if True:
         data_path = "data/TV_test.jsonl"
         dataset = NQADataset(data_path=data_path, use_doc=True, use_short=True, use_long=False, num_samples = 32)
@@ -53,18 +53,19 @@ if __name__=="__main__":
     Enc=True
     Policy=False
     print('Loading LLM')
-    generate_config = config.generate_config
-    generate_config.temperature=1
+    generate_config = dict()
+    generate_config.update(config.generate_config)
+    generate_config["temperature"]=1
     if not Policy:
-        generate_config.do_sample=False
-        generate_config.top_k=1
+        generate_config["do_sample"]=False
+        generate_config["top_k"]=1
     LM = LLaMa_reader(LM_dir, device, token = token, from_pretrained=True, generate_config=generate_config)
     dtype = LM.dtype
     num_dims = LM.model.config.hidden_size
     # print(LM.model.config)
     print(f'Initialize KnowEnc with {dtype}...')
     Encoder=KnowEncoder(dims = num_dims, **config.enc_config, dtype=dtype)
-
+    Encoder.eval()
     print(f'Initialize EncTunedLM...')
     peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=32, adapter_len=1)}
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
@@ -73,7 +74,7 @@ if __name__=="__main__":
     if Enc and True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        LM.load_state_dict(torch.load("save/TV_EncLM_9.pt", map_location='cpu'))
+        LM.load_state_dict(torch.load("save/TV_EncLM_7.pt", map_location='cpu'))
     # init retriever
     LM.eval()
 
@@ -124,7 +125,7 @@ if __name__=="__main__":
             if done[i]:
                 q_list.append(env.x[i])
                 a_list.append(env.cat_response(env.response_cache[i], True))
-                true_list.append(" ".join(env.y[i]))
+                true_list.append(env.ground_truth[i])
                 # print(a_list[-1], "\n", true_list[-1])
                 episode+=1
                 state[i] = env.reset(i)  # Shape: string
@@ -164,7 +165,7 @@ if __name__=="__main__":
             if done[i]:
                 q_list2.append(env.x[i])
                 a_list2.append(env.cat_response(env.response_cache[i], True))
-                true_list2.append(" ".join(env.y[i]))
+                true_list2.append(env.ground_truth[i])
                 episode+=1
                 state[i] = env.reset(i)  # Shape: string
                 done[i]=False
@@ -188,6 +189,21 @@ if __name__=="__main__":
     
     print(a_list[:5], true_list[:5])
     print(a_list2[:5], true_list2[:5])
+    # normalize
+    a_list = [a.lower() for a in a_list]
+    a_list2 = [a.lower() for a in a_list2]
+    true_list = [t.lower() if isinstance(t, str) else [e.lower() for e in t] for t in true_list]
+    true_list2 = [t.lower() if isinstance(t, str) else [e.lower() for e in t] for t in true_list2]
+    
+    if isinstance(true_list[0],list):
+        maching = [a_list[i] in true_list[i] for i in range(len(a_list))]
+        maching2 = [a_list2[i] in true_list2[i] for i in range(len(a_list2))]
+        print("Exact match:", sum(maching)/len(maching))
+        print("Exact match:", sum(maching2)/len(maching2))
+        true_list = [t[0] for t in true_list]
+        true_list2 = [t[0] for t in true_list2]
+        
+    
     bert = metric_c.Bert_score(a_list, true_list )
     R_1, R_2, R_L = metric_c.ROUGE_score(a_list, true_list )
     bleu = metric_c.BLEU_1_score(a_list, true_list)
