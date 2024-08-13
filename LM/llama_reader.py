@@ -164,13 +164,16 @@ class LLaMa_reader(torch.nn.Module):
             # Shift so that tokens < n predict n
             shift_logits = lm_logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
-            loss_fct = torch.nn.CrossEntropyLoss()
-            shift_logits = shift_logits.view(-1, self.config.vocab_size)
-            shift_labels = shift_labels.view(-1)
             # Enable model parallelism
             shift_labels = shift_labels.to(shift_logits.device)
+            # Flatten the tokens
+            loss_fct = torch.nn.CrossEntropyLoss()
+            
+            shift_logits = shift_logits.view(-1, self.config.vocab_size) #remove first dimension
+            shift_labels = shift_labels.view(-1) #remove first dimension
             loss = loss_fct(shift_logits, shift_labels)
+            
+            #loss = torch.vmap(loss_fct)(shift_logits, shift_labels) # this keep the first dimension, you can use it as a negtive reward
         # if labels is not None:
         #     del tokens['labels']
         #     # Shift so that tokens < n predict n
@@ -273,10 +276,10 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
         self._mark_only_adaption_prompts_as_trainable(self.model)
         self.module_name = prepare_config(peft.AdaptionPromptConfig, self.model).target_modules
 
-    def forward(self, *args, Doc_tokens = None, k = 1, use_ref = False, **kwargs):
+    def forward(self, *args, Doc_tokens = None, k = 1, use_ref = False, stages=1, **kwargs):
 
         if Doc_tokens is not None:
-            prefix = self.Enc.forward(Doc_tokens)
+            prefix = self.Enc.forward(Doc_tokens, stages = stages)
         else:
             prefix = None
         self._set_prefix(prefix)

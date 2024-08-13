@@ -24,9 +24,10 @@ ppo_config = Config(
     grad_step=1
 )
 enc_config = Config(
-    enc_lr=1.e-4,
-    num_layers=4,
-    num_prefix=10
+    enc_lr=1.e-5,
+    prefix_lr=3e-4,
+    num_layers=31,
+    num_prefix=20
 )
 
 enc_size_config = Config(

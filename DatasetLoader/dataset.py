@@ -199,7 +199,7 @@ class NQADataset(Dataset):
                     data.append(line)
                 else:
                     skip+=1
-        print("skip:",skip)
+        print(f"Loaded data total: {len(data)}, Skip: {skip}")
         return data
 
     def __len__(self):

@@ -13982,3 +13982,335 @@ ROUGE-1: 31.59
 ROUGE-2: 16.35
 ROUGE-L: 23.59
 BERT: 57.51
+Prompt: Which Lloyd Webber musical premiered in the US on 10th December 1993?
+Ground truth: Sunset Boulevard
+[ 0.00,  0.00,  0.00,  0.00, 37.23] Agent refined response: The Phantom of the Opera
+[ 0.00,  0.00,  0.00,  0.00, 36.06] Ori response: PHANTOM OF THE OPERA
+================================================================================
+Prompt: Who was the next British Prime Minister after Arthur Balfour?
+Ground truth: Campbell-Bannerman
+[ 0.00,  0.00,  0.00,  0.00, 41.23] Agent refined response: Asquith
+[ 0.00,  0.00,  0.00,  0.00, 46.30] Ori response: David LLOYD GEORGE
+================================================================================
+Prompt: Who had a 70s No 1 hit with Kiss You All Over?
+Ground truth: Exile
+[ 0.00,  0.00,  0.00,  0.00, 48.72] Agent refined response: GENE THOMAS
+[ 0.00,  0.00,  0.00,  0.00, 38.95] Ori response: THE PARTIDOS
+================================================================================
+Prompt: What claimed the life of singer Kathleen Ferrier?
+Ground truth: Cancer
+[100.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: Cancer
+[100.00, 100.00,  0.00, 100.00, 100.00] Ori response: Cancer
+================================================================================
+Prompt: Which actress was voted Miss Greenwich Village in 1942?
+Ground truth: Lauren Bacall
+[ 0.00,  0.00,  0.00,  0.00, 54.05] Agent refined response: Jackie Gleason
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: Lauren Bacall
+================================================================================
+Prompt: What was the name of Michael Jackson's autobiography written in 1988?
+Ground truth: Moonwalk
+[ 0.00,  0.00,  0.00,  0.00, 78.52] Agent refined response: Moonwalker
+[ 0.00,  0.00,  0.00,  0.00, 48.23] Ori response: MOJAH
+================================================================================
+Prompt: Which volcano in Tanzania is the highest mountain in Africa?
+Ground truth: Kilimanjaro
+[50.00, 66.67,  0.00, 66.67, 91.04] Agent refined response: Mount Kilimanjaro
+[50.00, 66.67,  0.00, 66.67, 91.04] Ori response: Mount Kilimanjaro
+================================================================================
+Prompt: The flag of Libya is a plain rectangle of which color?
+Ground truth: Green
+[100.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: Green
+[100.00, 100.00,  0.00, 100.00, 100.00] Ori response: Green
+================================================================================
+Prompt: Of which African country is Niamey the capital?
+Ground truth: Niger
+[100.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: Niger
+[ 0.00, 100.00,  0.00, 100.00, 100.00] Ori response: NIGER
+================================================================================
+Prompt: Which musical featured the song The Street Where You Live?
+Ground truth: My Fair Lady
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: My Fair Lady
+[ 0.00,  0.00,  0.00,  0.00, 34.34] Ori response: OLIVER!
+================================================================================
+Prompt: "Who was the target of the failed ""Bomb Plot"" of 1944?"
+Ground truth: Hitler
+[ 0.00,  0.00,  0.00,  0.00, 61.96] Agent refined response: WINSTON CHURCHILL
+[ 0.00,  0.00,  0.00,  0.00, 41.79] Ori response: FDR
+================================================================================
+Prompt: Who had an 80s No 1 hit with Hold On To The Nights?
+Ground truth: Richard Marx
+[ 0.00,  0.00,  0.00,  0.00, 48.22] Agent refined response: WHITNEY HOUSTON
+[ 0.00,  0.00,  0.00,  0.00, 38.13] Ori response: SHANNON
+================================================================================
+Prompt: Who directed the classic 30s western Stagecoach?
+Ground truth: John Ford
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: John Ford
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: John Ford
+================================================================================
+Prompt: Dave Gilmore and Roger Waters were in which rock group?
+Ground truth: Pink Floyd
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: Pink Floyd
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: Pink Floyd
+================================================================================
+Prompt: Which highway was Revisited in a classic 60s album by Bob Dylan?
+Ground truth: 61
+[50.00, 66.67,  0.00, 66.67, 61.70] Agent refined response: 61 HIGHWAY
+[ 0.00,  0.00,  0.00,  0.00, 35.64] Ori response: HIGH WAY
+================================================================================
+Prompt: Which was the only eastern bloc country to participate in the 1984 LA Olympics?
+Ground truth: Rumania
+[ 0.00,  0.00,  0.00,  0.00, 42.17] Agent refined response: Hungary
+[ 0.00,  0.00,  0.00,  0.00, 37.91] Ori response: East Germany
+================================================================================
+Prompt: Which 90s sci fi series with James Belushi was based on Bruce Wagner's comic strip of the same name?
+Ground truth: Wild Palms
+[ 0.00,  0.00,  0.00,  0.00, 50.71] Agent refined response: Total Recall
+[ 0.00,  0.00,  0.00,  0.00, 58.77] Ori response: TWIN PEAKS
+================================================================================
+Prompt: If I Were A Rich Man Was a big hit from which stage show?
+Ground truth: Fiddler on the Roof
+[50.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: Fiddler On The Roof
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: Fiddler on the Roof
+================================================================================
+Prompt: Men Against the Sea and Pitcairn's Island were two sequels to what famous novel?
+Ground truth: Mutiny On The Bounty
+[ 0.00,  0.00,  0.00,  0.00, 42.70] Agent refined response: MOBY DICK
+[ 0.00, 28.57,  0.00, 28.57, 29.88] Ori response: OBSERVE THE CIRCUMSTANCE
+================================================================================
+Prompt: What was Truman Capote's last name before he was adopted by his stepfather?
+Ground truth: Persons
+[ 0.00,  0.00,  0.00,  0.00, 34.39] Agent refined response: Capote
+[ 0.00,  0.00,  0.00,  0.00, 34.39] Ori response: Capote
+================================================================================
+Prompt: In Lewis Carroll's poem The Hunting of the Snark, what did the elusive, troublesome snark turn into to fool hunters?
+Ground truth: A boojum
+[50.00, 50.00,  0.00, 50.00, 48.91] Agent refined response: A Poet
+[50.00, 50.00,  0.00, 50.00, 66.75] Ori response: A booby
+================================================================================
+Prompt: What Michelle Pfeiffer movie got a boost from the Coolio song Gangsta's Paradise?
+Ground truth: Dangerous Minds
+[50.00, 50.00,  0.00, 50.00, 72.03] Agent refined response: Dangerous Liaisons
+[50.00, 50.00,  0.00, 50.00, 70.04] Ori response: Dangerous Liasons
+================================================================================
+Prompt: What was President Gerald Ford's middle name?
+Ground truth: Rudolph
+[ 0.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: RUDOLPH
+[ 0.00,  0.00,  0.00,  0.00, 49.98] Ori response: Melvill
+================================================================================
+Prompt: Art Garfunkel trained for which profession although he didn't qualify?
+Ground truth: Architect
+[ 0.00,  0.00,  0.00,  0.00, 72.74] Agent refined response: Pilot
+[ 0.00,  0.00,  0.00,  0.00, 67.27] Ori response: Doctor
+================================================================================
+Prompt: Who was the last inmate of Spandau jail in Berlin?
+Ground truth: Rudolf Hess
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: Rudolf Hess
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: Rudolf Hess
+================================================================================
+Prompt: In the 80s who wrote the novel Empire of The Sun?
+Ground truth: J. G. Ballard
+[33.33, 100.00, 100.00, 100.00, 100.00] Agent refined response: J.G. Ballard
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: J. G. Ballard
+================================================================================
+Prompt: Kagoshima international airport is in which country?
+Ground truth: Japan
+[100.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: Japan
+[ 0.00, 100.00,  0.00, 100.00, 100.00] Ori response: JAPAN
+================================================================================
+Prompt: In which sport could the Pacers take on the Pistons?
+Ground truth: A: Basketball
+[ 0.00, 66.67,  0.00, 66.67, 67.94] Agent refined response: BASKETBALL
+[ 0.00, 66.67,  0.00, 66.67, 67.94] Ori response: BASKETBALL
+================================================================================
+Prompt: Kim Carnes' nine weeks at No 1 with Bette Davis Eyes was interrupted for one week by which song?
+Ground truth: Stars on 45 medley
+[ 0.00,  0.00,  0.00,  0.00, 30.95] Agent refined response: DON'T IT MAKE MY BROWN EYES GO BLUE
+[ 0.00,  0.00,  0.00,  0.00, 30.49] Ori response: TOM GRESHAM'S DAUGHTER
+================================================================================
+Prompt: Where in Canada is the Lion's Gate bridge?
+Ground truth: Vancouver
+[ 0.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: VANCOUVER
+[100.00, 100.00,  0.00, 100.00, 100.00] Ori response: Vancouver
+================================================================================
+Prompt: What was Walter Matthau's first movie?
+Ground truth: The Kentuckian
+[ 0.00,  0.00,  0.00,  0.00, 24.84] Agent refined response: 65 days
+[ 0.00, 33.33,  0.00, 33.33, 39.70] Ori response: THE LADY EMPTY SHOES
+================================================================================
+Prompt: Where in England was actor Nigel Hawthorne born?
+Ground truth: Coventry
+[ 0.00,  0.00,  0.00,  0.00, 60.58] Agent refined response: Chesterfield
+[ 0.00,  0.00,  0.00,  0.00, 75.31] Ori response: Hastings
+================================================================================
+Prompt: Which Lloyd Webber musical premiered in the US on 10th December 1993?
+Ground truth: Sunset Boulevard
+[ 0.00,  0.00,  0.00,  0.00, 47.95] Agent refined response: PHANTOM
+[ 0.00,  0.00,  0.00,  0.00, 37.23] Ori response: The Phantom of the Opera
+================================================================================
+Prompt: Who was the next British Prime Minister after Arthur Balfour?
+Ground truth: Campbell-Bannerman
+[ 0.00,  0.00,  0.00,  0.00, 46.30] Agent refined response: David Lloyd George
+[ 0.00,  0.00,  0.00,  0.00, 46.30] Ori response: David Lloyd George
+================================================================================
+Prompt: Who had a 70s No 1 hit with Kiss You All Over?
+Ground truth: Exile
+[ 0.00,  0.00,  0.00,  0.00, 39.70] Agent refined response: SHILLELAGhs
+[ 0.00,  0.00,  0.00,  0.00, 45.23] Ori response: DYLAN THOMAS
+================================================================================
+Prompt: What claimed the life of singer Kathleen Ferrier?
+Ground truth: Cancer
+[ 0.00,  0.00,  0.00,  0.00, 54.31] Agent refined response: Brain Tumour
+[100.00, 100.00,  0.00, 100.00, 100.00] Ori response: Cancer
+================================================================================
+Prompt: Which actress was voted Miss Greenwich Village in 1942?
+Ground truth: Lauren Bacall
+[ 0.00,  0.00,  0.00,  0.00, 44.04] Agent refined response: Marilyn Monroe
+[ 0.00,  0.00,  0.00,  0.00, 44.79] Ori response: Alice Faye
+================================================================================
+Prompt: What was the name of Michael Jackson's autobiography written in 1988?
+Ground truth: Moonwalk
+[ 0.00,  0.00,  0.00,  0.00, 78.52] Agent refined response: Moonwalker
+[ 0.00,  0.00,  0.00,  0.00, 78.52] Ori response: Moonwalker
+================================================================================
+Prompt: Which volcano in Tanzania is the highest mountain in Africa?
+Ground truth: Kilimanjaro
+[50.00, 66.67,  0.00, 66.67, 91.04] Agent refined response: Mount Kilimanjaro
+[50.00, 66.67,  0.00, 66.67, 91.04] Ori response: Mount Kilimanjaro
+================================================================================
+Prompt: The flag of Libya is a plain rectangle of which color?
+Ground truth: Green
+[100.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: Green
+[100.00, 100.00,  0.00, 100.00, 100.00] Ori response: Green
+================================================================================
+Prompt: Of which African country is Niamey the capital?
+Ground truth: Niger
+[100.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: Niger
+[ 0.00, 100.00,  0.00, 100.00, 100.00] Ori response: NIGER
+================================================================================
+Prompt: Which musical featured the song The Street Where You Live?
+Ground truth: My Fair Lady
+[ 0.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: MY FAIR LADY
+[ 0.00,  0.00,  0.00,  0.00, 46.81] Ori response: THE GOODBYE GIRL
+================================================================================
+Prompt: "Who was the target of the failed ""Bomb Plot"" of 1944?"
+Ground truth: Hitler
+[ 0.00,  0.00,  0.00,  0.00, 40.46] Agent refined response: Sir Kenneth More
+[50.00, 66.67,  0.00, 66.67, 80.16] Ori response: Adolf Hitler
+================================================================================
+Prompt: Who had an 80s No 1 hit with Hold On To The Nights?
+Ground truth: Richard Marx
+[ 0.00,  0.00,  0.00,  0.00, 30.50] Agent refined response: TROOPER
+[ 0.00,  0.00,  0.00,  0.00, 38.13] Ori response: Shannon
+================================================================================
+Prompt: Who directed the classic 30s western Stagecoach?
+Ground truth: John Ford
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: John Ford
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: John Ford
+================================================================================
+Prompt: Dave Gilmore and Roger Waters were in which rock group?
+Ground truth: Pink Floyd
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: Pink Floyd
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: Pink Floyd
+================================================================================
+Prompt: Which highway was Revisited in a classic 60s album by Bob Dylan?
+Ground truth: 61
+[33.33, 50.00,  0.00, 50.00, 44.07] Agent refined response: Highway 61 Revisited
+[ 0.00,  0.00,  0.00,  0.00, 27.80] Ori response: A LOVE SONG
+================================================================================
+Prompt: Which was the only eastern bloc country to participate in the 1984 LA Olympics?
+Ground truth: Rumania
+[ 0.00,  0.00,  0.00,  0.00, 49.00] Agent refined response: VESTA NAMA
+[ 0.00,  0.00,  0.00,  0.00, 37.91] Ori response: East Germany
+================================================================================
+Prompt: Which 90s sci fi series with James Belushi was based on Bruce Wagner's comic strip of the same name?
+Ground truth: Wild Palms
+[ 0.00,  0.00,  0.00,  0.00, 58.77] Agent refined response: Twin Peaks
+[ 0.00,  0.00,  0.00,  0.00, 49.30] Ori response: The Zeta Project
+================================================================================
+Prompt: If I Were A Rich Man Was a big hit from which stage show?
+Ground truth: Fiddler on the Roof
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: Fiddler on the Roof
+[50.00, 100.00, 100.00, 100.00, 100.00] Ori response: Fiddler On The Roof
+================================================================================
+Prompt: Men Against the Sea and Pitcairn's Island were two sequels to what famous novel?
+Ground truth: Mutiny On The Bounty
+[ 0.00,  0.00,  0.00,  0.00, 28.12] Agent refined response: A TREE GROWS IN BROOKLYN
+[ 0.00,  0.00,  0.00,  0.00, 40.60] Ori response: MOBY-DICK
+================================================================================
+Prompt: What was Truman Capote's last name before he was adopted by his stepfather?
+Ground truth: Persons
+[ 0.00,  0.00,  0.00,  0.00, 59.50] Agent refined response: MASON
+[ 0.00,  0.00,  0.00,  0.00, 34.39] Ori response: CAPOTE
+================================================================================
+Prompt: In Lewis Carroll's poem The Hunting of the Snark, what did the elusive, troublesome snark turn into to fool hunters?
+Ground truth: A boojum
+[20.00, 33.33,  0.00, 33.33, 48.17] Agent refined response: A frost and rainbow.
+[50.00, 50.00,  0.00, 50.00, 60.36] Ori response: A banana
+================================================================================
+Prompt: What Michelle Pfeiffer movie got a boost from the Coolio song Gangsta's Paradise?
+Ground truth: Dangerous Minds
+[ 0.00,  0.00,  0.00,  0.00, 41.52] Agent refined response: LA VIE EN ROSE
+[50.00, 50.00,  0.00, 50.00, 72.03] Ori response: Dangerous Liaisons
+================================================================================
+Prompt: What was President Gerald Ford's middle name?
+Ground truth: Rudolph
+[ 0.00,  0.00,  0.00,  0.00, 75.97] Agent refined response: Leslie
+[ 0.00,  0.00,  0.00,  0.00, 42.36] Ori response: Bruan
+================================================================================
+Prompt: Art Garfunkel trained for which profession although he didn't qualify?
+Ground truth: Architect
+[ 0.00,  0.00,  0.00,  0.00, 56.70] Agent refined response: RAILWAY CONDUCTOR
+[ 0.00,  0.00,  0.00,  0.00, 55.78] Ori response: APOSTOLIC MINISTER
+================================================================================
+Prompt: Who was the last inmate of Spandau jail in Berlin?
+Ground truth: Rudolf Hess
+[100.00, 100.00, 100.00, 100.00, 100.00] Agent refined response: Rudolf Hess
+[100.00, 100.00, 100.00, 100.00, 100.00] Ori response: Rudolf Hess
+================================================================================
+Prompt: In the 80s who wrote the novel Empire of The Sun?
+Ground truth: J. G. Ballard
+[33.33, 100.00, 100.00, 100.00, 100.00] Agent refined response: J.G. Ballard
+[30.33, 40.00,  0.00, 40.00, 74.95] Ori response: JG Ballard
+================================================================================
+Prompt: Kagoshima international airport is in which country?
+Ground truth: Japan
+[100.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: Japan
+[ 0.00, 100.00,  0.00, 100.00, 100.00] Ori response: JAPAN
+================================================================================
+Prompt: In which sport could the Pacers take on the Pistons?
+Ground truth: A: Basketball
+[13.53, 66.67,  0.00, 66.67, 67.94] Agent refined response: Basketball
+[13.53, 66.67,  0.00, 66.67, 67.94] Ori response: Basketball
+================================================================================
+Prompt: Kim Carnes' nine weeks at No 1 with Bette Davis Eyes was interrupted for one week by which song?
+Ground truth: Stars on 45 medley
+[ 0.00,  0.00,  0.00,  0.00, 40.74] Agent refined response: Billy Idol's White Wedding
+[ 0.00,  0.00,  0.00,  0.00, 31.09] Ori response: I Will Survive
+================================================================================
+Prompt: Where in Canada is the Lion's Gate bridge?
+Ground truth: Vancouver
+[ 0.00, 100.00,  0.00, 100.00, 100.00] Agent refined response: VANCOUVER
+[100.00, 100.00,  0.00, 100.00, 100.00] Ori response: Vancouver
+================================================================================
+Prompt: What was Walter Matthau's first movie?
+Ground truth: The Kentuckian
+[ 0.00,  0.00,  0.00,  0.00, 27.80] Agent refined response: 1930: WAY DOWN EAST
+[33.33, 40.00,  0.00, 40.00, 40.56] Ori response: The Bad Seed
+================================================================================
+Prompt: Where in England was actor Nigel Hawthorne born?
+Ground truth: Coventry
+[ 0.00,  0.00,  0.00,  0.00, 77.82] Agent refined response: Shrewsbury
+[ 0.00,  0.00,  0.00,  0.00, 53.17] Ori response: Louth
+================================================================================
+Enc:True, Policy:False
+BLEU_1: 30.21
+ROUGE-1: 42.45
+ROUGE-2: 18.75
+ROUGE-L: 42.45
+BERT: 69.06
+Without Policy
+BLEU_1: 30.89
+ROUGE-1: 41.80
+ROUGE-2: 15.62
+ROUGE-L: 41.80
+BERT: 66.18

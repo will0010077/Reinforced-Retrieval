@@ -24,7 +24,8 @@ from itertools import chain
 
     
 def generate_segments(text:str, window_size, step)-> list[str]:
-
+    if isinstance(text, list):
+        text=" ".join(text)
     text = text.split()
     segment_list=[]
 
@@ -85,7 +86,7 @@ class LLMEnv_batch_version(nn.Module):
             return self.get_state(idx)
     @torch.no_grad()
     def _build_embedding(self, idx):
-        self.document[idx] = generate_segments(self.document[idx],config.data_config.windows, config.data_config.step)[:256]
+        self.document[idx] = generate_segments(self.document[idx],config.data_config.windows, config.data_config.step)[:512]
         self.input_ids[idx] = []
         self.attention_mask[idx] = []
         self.embedding[idx] = []
@@ -112,6 +113,8 @@ class LLMEnv_batch_version(nn.Module):
             self.current_data = self.dataset[self.current_index%len(self.dataset)]
         self.current_index+=1
         self.x[idx], self.y[idx], self.document[idx] = self.current_data
+        if isinstance(self.y[idx],list):
+            self.y[idx]=self.y[idx][0]
         self._build_embedding(idx)
         self.y[idx] = self.y[idx].split(' ')
         chunk_size = 10
@@ -283,7 +286,7 @@ class LLMEnv_batch_version(nn.Module):
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
         doc_token = self.ret.tokenizer(d_t, return_tensors="pt", padding=True).to(self.LM.device)
         # d_t = tensor_retuen_type(input_ids=d_t, attention_mask=torch.ones_like(d_t)).to(self.LM.device)
-        messages = [messages[j][:57]+ d_t[j]+ messages[j][57:] for j in range(len(messages))]
+        messages = [messages[j].replace(" </knowledge>", d_t[j]+" </knowledge>") for j in range(len(messages))]
 
         responses, token_prob_input, token_prob_resampled = self.LM.pseudo_generate(messages, answers, Doc_tokens=doc_token, temperture=0.5, return_prob=True, decode=False)
         return responses, token_prob_input, token_prob_resampled
@@ -360,13 +363,13 @@ class LLMEnv_test(LLMEnv_batch_version):
     
     def get_next_response(self, indices):
         response = [self.cat_response(self.response_cache[i]) for i in indices]
-        messages = [" According to the knowledge provided, ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
+        messages = [" ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]#According to the knowledge provided,
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
         doc_token = self.ret.tokenizer(d_t, return_tensors="pt", padding=True).to(self.LM.device)
         if self.step_size>64:
             for i in indices:
                 self.done[i] = True
-        messages = [messages[j][:57]+ d_t[j]+ messages[j][57:] for j in range(len(messages))]
+        # messages = [messages[j].replace(" </knowledge>", d_t[j]+" </knowledge>") for j in range(len(messages))]
         responses = self.LM.generate(messages, Doc_tokens=doc_token, max_new_tokens=self.step_size, decode=False)
         return responses
 class Orginal_Env(LLMEnv_test):
@@ -374,7 +377,7 @@ class Orginal_Env(LLMEnv_test):
         response = [self.cat_response(self.response_cache[i]) for i in indices]
         messages = [" According to the knowledge provided, ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
-        messages = [messages[j][:57]+ d_t[j]+ messages[j][57:] for j in range(len(messages))]
+        messages = [messages[j].replace(" </knowledge>", d_t[j]+" </knowledge>") for j in range(len(messages))]
         responses = self.LM.generate(messages, Doc_tokens=None, max_new_tokens=self.step_size, decode=False)
         return responses
     

@@ -39,18 +39,25 @@ if __name__=="__main__":
     
     
     print('Loading dataset...')
-    data_path='data/cleandata_with_doc.jsonl'
     num_testing=64
-    dataset=NQADataset(data_path=data_path, num_samples=18, use_doc=True)
+    if True:
+        data_path = "data/TV_test.jsonl"
+        dataset = NQADataset(data_path=data_path, use_doc=True, use_short=True, use_long=False, num_samples = 32)
+        length = 128
+    else:
+        data_path = "data/NQ_test.jsonl"
+        dataset = NQADataset(data_path=data_path, use_doc=True, use_short=False, use_long=True, num_samples = 32)
+        length = 256
     dataset = [*dataset]*64
     
-    Enc=False
+    Enc=True
     Policy=False
     print('Loading LLM')
     generate_config = config.generate_config
     generate_config.temperature=1
     if not Policy:
         generate_config.do_sample=False
+        generate_config.top_k=1
     LM = LLaMa_reader(LM_dir, device, token = token, from_pretrained=True, generate_config=generate_config)
     dtype = LM.dtype
     num_dims = LM.model.config.hidden_size
@@ -62,13 +69,13 @@ if __name__=="__main__":
     peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=32, adapter_len=1)}
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
     LM.to(device)
-    LM.eval()
 
     if Enc and True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        LM.load_state_dict(torch.load("save/EncLM_5.pt", map_location='cpu'))
+        LM.load_state_dict(torch.load("save/TV_EncLM_9.pt", map_location='cpu'))
     # init retriever
+    LM.eval()
 
     print('Initilize retriever')
     lex_MAE_retriver=lex_retriever()
@@ -177,7 +184,10 @@ if __name__=="__main__":
             next_state, reward, done, _ = env.step(action)  # next_state shape: string, reward shape: scalar, done shape: scalar (boolean)
             # print(env.cat_response(env.response_cache))
             state = next_state
-            
+    
+    
+    print(a_list[:5], true_list[:5])
+    print(a_list2[:5], true_list2[:5])
     bert = metric_c.Bert_score(a_list, true_list )
     R_1, R_2, R_L = metric_c.ROUGE_score(a_list, true_list )
     bleu = metric_c.BLEU_1_score(a_list, true_list)

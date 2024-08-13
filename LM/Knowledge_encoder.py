@@ -33,13 +33,15 @@ class KnowEncoder(torch.nn.Module):
             torch.empty(self.num_layers, self.num_prefix, self.dims, device=self.model.device, dtype=self.dtype).normal_()
         )#(layer, P, d)
         assert num_prefix<999-104
-        self.register_buffer('prefix_tokens', torch.arange(104, 104+30).unsqueeze_(0), persistent=False)#(1,P)
+        self.register_buffer('prefix_tokens', torch.arange(104, 104+64).unsqueeze_(0), persistent=False)#(1,P)
         self.prefix_tokens:Tensor
-    def forward(self, x, k=1, device = None)->tuple[torch.Tensor]:
+    def forward(self, x, k=1, device = None, stages = 1)->tuple[torch.Tensor]:
         '''
         x: (B*k, n)
         output: (layer, B, k*P, dims)
         '''
+        if stages==0:
+            return  (None,)+ (None,)*(32-self.num_layers-1) + self.adaption_prompt.unsqueeze(1).unbind()
         if device is None:
             device = self.model.device
         if isinstance(x,list):
@@ -70,7 +72,7 @@ class KnowEncoder(torch.nn.Module):
         y = y.reshape([B, k*self.prefix_tokens.shape[1], self.dims])#(B, k*P, dims)
         y = y.to(device, non_blocking=True)
         # static prefix + Enc prefix
-        return  (y,)+ (None,)*(32-self.num_layers-1) + self.adaption_prompt.unsqueeze(1).unbind()
+        return  (y,)+ (None,)*(32-self.num_layers-1) + self.adaption_prompt.detach().unsqueeze(1).unbind()
     
     def mean_pooling(self,token_embeddings, mask):
         token_embeddings = token_embeddings.masked_fill(~mask[..., None].bool(), 0.)

@@ -161,8 +161,17 @@ def main():
     
     
     print('Loading dataset...')
-    data_path = 'data/cleandata_with_doc.jsonl'
-    dataset = NQADataset(data_path=data_path, num_samples=18, use_doc=True)
+    
+    if True:
+        data_path = "data/TV_train_QAD.jsonl"
+        dataset = NQADataset(data_path=data_path, use_doc=True, use_short=True, use_long=False, num_samples = None)
+        length = 128
+    else:
+        data_path = "data/NQ_train_QAD.jsonl"
+        dataset = NQADataset(data_path=data_path, use_doc=True, use_short=False, use_long=True, num_samples = None)
+        length = 256
+    # data_path = 'data/cleandata_with_doc.jsonl'
+    # dataset = NQADataset(data_path=data_path, num_samples=18, use_doc=True)
     
     env = LLMEnv_batch_version(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs)
     
