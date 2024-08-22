@@ -13,7 +13,8 @@ from DocBuilder.utils import tensor_retuen_type
 
 
 if __name__=="__main__":
-    process=["dataclean", "process_QAD", "", ""]
+    '''It is important to run data preprocess before training, it takes a while.'''
+    process=["dataclean", "process Q-A-Doc pair", "", ""]
     runall=False
     device=0
     if len(sys.argv) < 2:
@@ -65,8 +66,6 @@ if __name__=="__main__":
         file = open(f"data/{data_name[data_select]}_train_QAD.jsonl", "w")
         for i, (q, la, a, d) in tqdm(enumerate(train_data), total=len(train_data), ncols=0, smoothing=0.05):
             d = generate_segments(d, 96, 64)
-            input_ids = []
-            attention_mask = []
             embedding = []
             tokens = lex_MAE_retriver.tokenizer(d, padding = True, truncation=True, max_length=256, return_tensors="pt", add_special_tokens=False)
             bs=64

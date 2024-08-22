@@ -199,7 +199,8 @@ def validation(model:nn.Module):
 
 
 if __name__=='__main__':
-
+    '''This is retrieval fine-tuned by infoNCE, which maximize inner prodoct of query and relevant document embedding.
+    You can do this after train_ret_1 for better performance, or you can skip ret_1, direct fine-tune model'''
     data_path='data/cleandata.pt'
     # print(torch.load(data_path))
     dataset=NQADataset(data_path=data_path)

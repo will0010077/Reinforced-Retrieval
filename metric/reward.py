@@ -49,8 +49,8 @@ class metric(torch.nn.Module):
         ).cpu()
         P, R, F1  = all_preds[..., 0], all_preds[..., 1], all_preds[..., 2]  # P, R, F
         score = F1
-        if any(score==0.):
-            raise ValueError
+        # if any(score==0.):
+        #     print("Warning: Zero BERTScore.")
         return score.unbind()
 
     def BLEU_1_score(self, cands: List[str], refs: List[str]) -> List[float]:

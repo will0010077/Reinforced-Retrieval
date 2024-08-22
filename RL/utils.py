@@ -35,7 +35,7 @@ def generate_segments(text:str, window_size, step)-> list[str]:
         segment_list.append(" ".join(segment_data))
     return  segment_list
 class LLMEnv_batch_version(nn.Module):
-    def __init__(self, dataset, LM: EncTunedLM, ret: lex_retriever, action_space_size, history_len=4, batch_size=8, shuffle = True, step_size=15, eos_id = None):
+    def __init__(self, dataset, LM: EncTunedLM, ret: lex_retriever, action_space_size, collate, history_len=4, batch_size=8, shuffle = True, step_size=15, eos_id = None):
         super().__init__()
         self.metric = metric()
         self.dataset = dataset  # List of tuples (x, y)
@@ -46,7 +46,7 @@ class LLMEnv_batch_version(nn.Module):
             self.eos_id = self.LM.tokenizer.eos_token_id
         self.ret = ret
         self.current_index = 0
-        self.collate = collate()
+        self.collate = collate
         self.batch_size = batch_size  # Set batch size as length of dataset
         self.action_verb=[" retrieve", " proceed", " rewrite"]
         self.step_size=step_size
@@ -282,7 +282,7 @@ class LLMEnv_batch_version(nn.Module):
     def get_next_response(self, indices):
         # response = [self.cat_response(self.response_cache[i]) for i in indices]
         response = [" ".join(self.y[i][:self.n[i]]) for i in indices]
-        messages = [" According to the knowledge provided, ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
+        messages = [" ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
         answers = [self.y[i][self.n[i]] for i in indices]
         # d_t = torch.stack([self.d_t[i] for i in indices])#need to padding
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
@@ -296,7 +296,7 @@ class LLMEnv_batch_version(nn.Module):
     def get_basic_response(self, x, y, d_t):
         messages, answer = self.collate.templete(x, "")
         d_t = tensor_retuen_type(input_ids=d_t[None], attention_mask=torch.ones_like(d_t[None])).to(self.LM.device)
-        response = self.LM.pseudo_generate(messages, y, Doc_tokens=d_t, temperture=0.2, return_prob=False, decode=True)
+        response = self.LM.pseudo_generate(messages, y, Doc_tokens=d_t, temperture=0.01, return_prob=False, decode=True)
         return response
 
 
@@ -313,7 +313,7 @@ class LLMEnv_test(LLMEnv_batch_version):
         self.actions = actions.clone()
         for i, action in enumerate(actions):
             if not self.done[i]:
-                if self.steps[i] >20:
+                if  len(self.y[i])-self.steps[i] > self.n[i]:
                     action = 1
                     self.actions[i]=1
                 if action == 0:  # Retrieve Document
@@ -368,30 +368,33 @@ class LLMEnv_test(LLMEnv_batch_version):
         messages = [" ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]#According to the knowledge provided,
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
         doc_token = self.ret.tokenizer(d_t, return_tensors="pt", padding=True).to(self.LM.device)
+        # messages = [messages[j].replace(" </knowledge>", d_t[j]+" </knowledge>") for j in range(len(messages))]
+        responses = self.LM.generate(messages, Doc_tokens=doc_token, max_new_tokens=self.step_size, decode=False)
         if self.step_size>64:
             for i in indices:
                 self.done[i] = True
-        # messages = [messages[j].replace(" </knowledge>", d_t[j]+" </knowledge>") for j in range(len(messages))]
-        responses = self.LM.generate(messages, Doc_tokens=doc_token, max_new_tokens=self.step_size, decode=False)
         return responses
 class Orginal_Env(LLMEnv_test):
     def get_next_response(self, indices):
         response = [self.cat_response(self.response_cache[i]) for i in indices]
-        messages = [" According to the knowledge provided, ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
+        messages = [" ".join(self.collate.templete(self.x[i], response[idx])) for idx, i in enumerate(indices)]
         d_t = self.ret.tokenizer.batch_decode([self.d_t[i] for i in indices], skip_special_tokens=True)
         messages = [messages[j].replace(" </knowledge>", d_t[j]+" </knowledge>") for j in range(len(messages))]
         responses = self.LM.generate(messages, Doc_tokens=None, max_new_tokens=self.step_size, decode=False)
+        if self.step_size>64:
+            for i in indices:
+                self.done[i] = True
         return responses
     
     
 class BertAgentCritic(nn.Module):
     def __init__(self, model_config, action_space_size):
         super(BertAgentCritic, self).__init__()
-        self.bert = RobertaModel.from_pretrained(config.roberta_dir, torch_dtype=torch.bfloat16).to(torch.bfloat16)
+        self.bert = RobertaModel.from_pretrained(config.roberta_dir)
         embedding = self.bert.embeddings.position_embeddings
 
         self.max_token_length = config.agent_size_config.max_position_embeddings
-        new_embedding = torch.nn.Embedding(self.max_token_length +2, embedding.embedding_dim, dtype = torch.bfloat16)
+        new_embedding = torch.nn.Embedding(self.max_token_length +2, embedding.embedding_dim)
         new_embedding.weight.data[:min(len(embedding.weight), new_embedding.num_embeddings),:]=embedding.weight.data[:min(len(embedding.weight), new_embedding.num_embeddings)]
         self.bert.embeddings.position_embeddings = new_embedding
         self.bert.embeddings.register_buffer(
@@ -412,7 +415,7 @@ class BertAgentCritic(nn.Module):
         self.special_tokens = self.tokenizer.convert_tokens_to_ids(['[actor_head]', '[value_head]'])
         self.special_tokens = torch.tensor(self.special_tokens).unsqueeze(0)
     
-
+    @torch.autocast("cuda", torch.bfloat16)
     def forward(self, state=None, inputs=None):
         assert (state is not None and inputs is None) or (state is None and inputs is not None)
         if inputs is None:

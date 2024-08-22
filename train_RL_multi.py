@@ -3,6 +3,7 @@ import os
 
 import sys
 import torch
+from torch.cuda.amp import autocast
 from torch.utils.data import DataLoader
 from torch.distributions import Categorical
 from torch import optim 
@@ -125,13 +126,14 @@ def training(rank:int, world_size:int, port, total:int, env:LLMEnv_batch_version
             if rank==0:
                 memory[:] = []
 
-        if time() - save_time > 29.5*60:
+        if time() - save_time > 10*60:
             save_time = time()
             if rank == 0:
                 # Save Agent weight
-                torch.save(agentDDP.module.state_dict(), f"./save/Agent_{rank}.pt")
+                torch.save(agentDDP.module.state_dict(), f"./save/TV_Agent_{rank}.pt")
 
 def main():
+    '''Train agent with RAG enviroment. The code can run on multiple GPU to increase training speed.'''
     world_size = torch.cuda.device_count()
     # world_size = 1
     total = 5000
@@ -144,7 +146,7 @@ def main():
     dtype = LM.dtype
     num_dims = LM.model.config.hidden_size
     print(f'Initialize KnowEnc with {dtype}...')
-    Encoder = KnowEncoder(dims=num_dims, **config.enc_config, dtype=dtype).to(torch.bfloat16)
+    Encoder = KnowEncoder(dims=num_dims, **config.enc_config, dtype=dtype)
 
     print(f'Initialize EncTunedLM...')
     peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=32, adapter_len=1)}
@@ -152,7 +154,7 @@ def main():
     LM.eval()
 
     print(f'Loading EncTunedLM weight...')
-    LM.load_state_dict(torch.load("save/EncLM_5.pt", map_location='cpu'))
+    LM.load_state_dict(torch.load("save/TV_EncLM_0.pt", map_location='cpu'))
 
     print('Initialize retriever')
     lex_MAE_retriver = lex_retriever()
@@ -163,21 +165,23 @@ def main():
     print('Loading dataset...')
     
     if True:
-        data_path = "data/TV_train_QAD.jsonl"
-        dataset = NQADataset(data_path=data_path, use_doc=True, use_short=True, use_long=False, num_samples = None)
+        data_path = "data/TV_test.jsonl"
+        dataset = NQADataset(data_path=data_path, use_doc=True, use_short=True, use_long=False, num_samples = 200)
         length = 128
+        collate_fn = collate(max_length=length, form="short")
     else:
-        data_path = "data/NQ_train_QAD.jsonl"
+        data_path = "data/NQ_train.jsonl"
         dataset = NQADataset(data_path=data_path, use_doc=True, use_short=False, use_long=True, num_samples = None)
         length = 256
+        collate_fn = collate(max_length=length, form = "long")
     # data_path = 'data/cleandata_with_doc.jsonl'
     # dataset = NQADataset(data_path=data_path, num_samples=18, use_doc=True)
     
-    env = LLMEnv_batch_version(dataset, LM, lex_MAE_retriver, 3, batch_size=env_bs)
+    env = LLMEnv_batch_version(dataset, LM, lex_MAE_retriver, 3, collate_fn, batch_size=env_bs)
     
     print("Initialize Agent...")
-    agent = BertAgentCritic(config.agent_size_config, 3).to(torch.bfloat16)
-    agent.load_state_dict(torch.load("save/Agent_0.pt", map_location="cpu"))
+    agent = BertAgentCritic(config.agent_size_config, 3)
+    agent.load_state_dict(torch.load("save/TV_Agent_0.pt", map_location="cpu"))
     memory = multiprocessing.Manager().list() 
     with socket() as s:
         s.bind(('', 0))

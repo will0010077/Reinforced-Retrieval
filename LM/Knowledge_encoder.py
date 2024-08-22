@@ -6,7 +6,7 @@ import torch
 
 from torch import nn, Tensor
 import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModel, BertConfig, BertModel
+from transformers import AutoTokenizer, AutoModel, BertConfig, BertModel, RobertaConfig, RobertaModel
 import config
 
 bert_dir = config.bert_dir
@@ -17,37 +17,40 @@ class KnowEncoder(torch.nn.Module):
     def __init__(self, num_layers, dims, num_prefix, dtype=torch.bfloat16, **kwargs):
         super().__init__()
         
-        self.model = BertModel(BertConfig(**enc_size_config))
-        bert = BertModel.from_pretrained(bert_dir)
+        self.model = RobertaModel(RobertaConfig(**enc_size_config))
+        bert = RobertaModel.from_pretrained(config.roberta_dir)
         self.model.embeddings = bert.embeddings
         for i in range(enc_size_config.num_hidden_layers):
             self.model.encoder.layer[i] = bert.encoder.layer[i]
         del bert
-        self.tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
+        self.model.requires_grad_(False)
+        self.tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(config.roberta_dir)
         self.num_layers=num_layers
         self.num_prefix = num_prefix
         self.dims=dims
         self.dtype=dtype
-        
+        self.num_head = 16
         # Linear layer to project the output of the attention layer to the desired dimension
         self.proj_layer = nn.Linear(enc_size_config['hidden_size'], self.dims)
+        self.attention_pooling = nn.MultiheadAttention(self.dims, self.num_head, 0., batch_first=True)
         # Adaption prompt as before
         self.adaption_prompt = nn.Parameter(
-            torch.empty(self.num_layers, self.num_prefix, self.dims, device=self.model.device, dtype=self.dtype).normal_()
+            torch.empty(self.num_layers, self.num_prefix, self.dims, device=self.model.device, dtype=torch.float32).normal_()
         )#(layer, P, d)
         self.enc_len = 32
-        self.pooling_drop = 0.1
+        self.pooling_drop = 0.
         self.querys = nn.Parameter(
-            torch.empty(self.enc_len, self.dims, device=self.model.device, dtype=self.dtype).normal_()
+            torch.empty(1,self.enc_len, self.dims, device=self.model.device, dtype=torch.float32).normal_()
         )
-        
+
+    @torch.autocast("cuda", dtype=torch.bfloat16)
     def forward(self, x, k=1, device = None, stage = 1)->tuple[torch.Tensor]:
         '''
         x: (B*k, n)
         output: (layer, B, k*P, dims)
         '''
         if stage==0:
-            return  (None,)+ (None,)*(32-self.num_layers-1) + self.adaption_prompt.unsqueeze(1).unbind()
+            return  (None,)+ (None,)*(32-self.num_layers-1) + self.adaption_prompt.to(self.dtype).to(device, non_blocking=True).unsqueeze(1).unbind()
         if device is None:
             device = self.model.device
         if isinstance(x,list):
@@ -68,8 +71,10 @@ class KnowEncoder(torch.nn.Module):
         
         y = y.last_hidden_state#(B*k, N, d)
         y = self.proj_layer.forward(y)#(B*k, N, dim)
-        attention_mask  = attention_mask[:,None,:].bool()# (B,N) -> (B, LQ, N)
-        y = F.scaled_dot_product_attention(self.querys, y, y, attn_mask = attention_mask,  dropout_p=(self.pooling_drop if self.training else 0.0)) #(B, Qlen, dim)
+        attention_mask  = ~attention_mask[:,None,:].bool()# (B,N) -> (B, LQ, N)
+        attention_mask = attention_mask.repeat([self.num_head, self.querys.shape[-2],1])
+        # y = F.scaled_dot_product_attention(self.querys, y, y, attn_mask = attention_mask,  dropout_p=(self.pooling_drop if self.training else 0.0)) #(B, Qlen, dim)
+        y = self.attention_pooling.forward(self.querys.repeat([B*k,1,1]), y, y, attn_mask = attention_mask, need_weights=False)[0]
         # print('encoder_heads output:', y.shape)
         y = y.to(self.dtype)
         y = y.reshape([B, k, self.enc_len, self.dims, ])#(B, k, P, dim)
@@ -80,7 +85,8 @@ class KnowEncoder(torch.nn.Module):
         y = y.reshape([B, k*self.enc_len, self.dims])#(B, k*P, dims)
         y = y.to(device, non_blocking=True)
         # static prefix + Enc prefix
-        return  (y,)+ (None,)*(32-self.num_layers-1) + self.adaption_prompt.detach().unsqueeze(1).unbind()
+        # return  (y,)+ (None,)*(32-1) 
+        return  (y,)+ (None,)*(32-self.num_layers-1) + self.adaption_prompt.to(self.dtype).to(device).unsqueeze(1).unbind()
     
     def mean_pooling(self,token_embeddings, mask):
         token_embeddings = token_embeddings.masked_fill(~mask[..., None].bool(), 0.)

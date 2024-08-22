@@ -4,6 +4,7 @@ import os
 
 import torch
 from torch import nn
+from torch.cuda.amp import autocast, GradScaler
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torch.multiprocessing as mp
@@ -45,7 +46,7 @@ def training(rank, world_size, start_epoch, max_epoch, model, dataset, collate_f
     print(f"Running DDP on rank {rank}.")
     setup(rank, world_size, port)
     start, end = int(len(dataset)*rank/world_size), int(len(dataset)*(rank+1)/world_size)
-    loader = DataLoader(dataset[start: end], batch_size=16+16, shuffle=True, num_workers=1, collate_fn=collate_fn, persistent_workers=True)
+    loader = DataLoader(dataset[start: end], batch_size=8, shuffle=True, num_workers=1, collate_fn=collate_fn, persistent_workers=True)
 
     bs = loader.batch_size
     model = model.to(rank)
@@ -53,11 +54,11 @@ def training(rank, world_size, start_epoch, max_epoch, model, dataset, collate_f
 
     Enc_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_" not in n]
     Prefix_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_" in n]
-    optim = torch.optim.AdamW([{"params":Enc_param_list, "lr":enc_config.enc_lr}, {"params":Prefix_param_list, "lr":enc_config.prefix_lr, "weight_decay": 0.02}], betas = train_config.betas) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
+    optim = torch.optim.AdamW([{"params":Enc_param_list, "lr":enc_config.enc_lr}, {"params":Prefix_param_list, "lr":enc_config.prefix_lr}], betas = train_config.betas, weight_decay = 0.05) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
     # optim.load_state_dict(torch.load("save/EncLM_optim.pt", map_location="cpu"))
     iter_step = len(loader)*max_epoch
-    warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.01))
-    decay =  torch.optim.lr_scheduler.PolynomialLR(optim, total_iters=int(iter_step*1.3), power=1.5)
+    warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.05))
+    decay =  torch.optim.lr_scheduler.PolynomialLR(optim, total_iters=int(iter_step*1.2), power=2)
     scheduler = torch.optim.lr_scheduler.SequentialLR(optim, [warm, decay], [warm.total_iters])
     # torch.optim.lr_scheduler.CosineAnnealingWarmRestarts()
     ma_loss=2
@@ -81,10 +82,13 @@ def training(rank, world_size, start_epoch, max_epoch, model, dataset, collate_f
             ref_logp, (LM_output, loss) = model.forward(qa_tokens, Doc_tokens = d_tokens, stage = int(epoch>=1))
             # kl = F.kl_div(LM_output, ref_logp, log_target=True, reduction="batchmean")
             loss = loss.mean()
+            (loss).backward()
             # loss += kl.mean() * 0.1
-            loss.backward()
             if i%max(int(32/(world_size*bs)),1)==0:
+                # Unscale the gradients and perform optimizer step
                 optim.step()
+
+                # Update the scaler
             scheduler.step()
 # stop rolling ! 
             ma_loss = ma_loss*0.95 + 0.05*(loss.item() if not torch.isnan(loss) else ma_loss)
@@ -95,13 +99,14 @@ def training(rank, world_size, start_epoch, max_epoch, model, dataset, collate_f
         stream.synchronize()
         dist.barrier()
         if rank==0:
-            torch.save(model.module.state_dict(), f"save/TV_EncLM_{epoch}.pt")
+            torch.save(model.module.state_dict(), f"save/NQ_EncLM_{epoch}.pt")
             torch.save(optim.state_dict(), "save/EncLM_optim.pt")
         dist.barrier()
         
     cleanup()
 
 def main():
+    '''Train the knowledge encoder by (x,y,d) pairs, the data is from data_preprocess.py with "train_QAD" postfix, most be done before RL training.'''
     n_gpus = torch.cuda.device_count()
     # assert n_gpus >= 2, f"Requires at least 2 GPUs to run, but got {n_gpus}"
     world_size = n_gpus
@@ -115,30 +120,34 @@ def main():
     print(f'Initialize KnowEnc with {dtype}...')
     Encoder=KnowEncoder(dims = num_dims, **enc_config, dtype=dtype)
     Encoder.train()
-    Encoder.to(torch.bfloat16)
+    # Encoder.to(torch.bfloat16) # !!!!use autocast instead of model.to(bfloat16)!!!!
 
     print(f'Initialize EncTunedLM...')
     peft_configs = {'Enc': peft.AdaptionPromptConfig(adapter_layers=32, adapter_len=1)}
     LM = EncTunedLM(LM, Enc = Encoder, configs = peft_configs, adapter_name='Enc')
-    if False:
+    if True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        LM.load_state_dict(torch.load("save/TV_EncLM_2.pt", map_location='cpu'), strict=True)
+        try:
+            LM.load_state_dict(torch.load("save/TV_EncLM_0.pt", map_location='cpu'), strict=True)
+        except:
+            print("Loading may not finish.")
         
     start_epoch = 0
-    max_epoch = 10 # update epoch, not end epoch
+    max_epoch = 3 # update epoch, not end epoch
     print('Loading dataset...')
     
-    if True:
+    if False:
         data_path = "data/TV_train_QAD.jsonl"
         dataset = PretrainEnc(data_path=data_path, use_doc=True, use_short=True, use_long=False, num_samples = None)
-        # dataset = [*dataset]*2**8
+        # dataset = [*dataset]*2**7
         length = 128
+        collate_fn = collate(LM_dir, bert_dir, max_length=length, form="short").collate_qa_docs
     else:
         data_path = "data/NQ_train_QAD.jsonl"
         dataset = PretrainEnc(data_path=data_path, use_doc=True, use_short=False, use_long=True, num_samples = None)
         length = 256
-    collate_fn = collate(LM_dir, bert_dir, max_length=length).collate_qa_docs
+        collate_fn = collate(LM_dir, bert_dir, max_length=length, form = "long").collate_qa_docs
     dataset = [*dataset]
 
     with socket() as s:

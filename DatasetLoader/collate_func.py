@@ -55,7 +55,7 @@ class collateLM():
 
 
 class collate():
-    def __init__(self, LM_dir = LM_dir, bert_dir = bert_dir, max_length=256):
+    def __init__(self, LM_dir = LM_dir, bert_dir = bert_dir, max_length=256, form = "long"):
         
         self.datatokenizer:PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(bert_dir)
         self.LMtokenizer = AutoTokenizer.from_pretrained(
@@ -64,6 +64,7 @@ class collate():
         self.LMtokenizer.pad_token = self.LMtokenizer.eos_token
         self.eos_token = self.LMtokenizer.eos_token
         self.max_length = max_length
+        self.form = form
     def prepare_QA_token(self, texts:list[str], targets:list[str]):
         
         unlabel_str, label = zip(*[self.templete(q, a if isinstance(a, str) else a[0]) for q,a in zip(texts, targets)])
@@ -103,16 +104,33 @@ class collate():
     def templete(self, query:str, answer:str ='')->tuple[str]:
         Role = ["system", "user", "assistant"]
         query, answer = query.strip(), answer.strip()
-        if len(answer)<=40:
+        # if len(answer)<=40:
+        #     form = "very short"
+        # elif len(answer)>=200:
+        #     form = "very long"
+        # else:
+        #     form = ""
+        # messages = [
+        #     {"role": "system", "content": f"<knowledge>  </knowledge> Please provide a {form} answer based on knowledge"},
+        #     {"role": "user", "content": query}
+        # ]
+        
+        if self.form=="short":
             form = "very short"
-        elif len(answer)>=200:
+            messages = [
+                {"role": "system", "content": f"<knowledge>  </knowledge> Please provide a {form} answer in no more than three words."},
+                {"role": "user", "content": query}
+            ]
+        elif self.form=="long":
             form = "very long"
+            
+            messages = [
+                {"role": "system", "content": f"<knowledge>  </knowledge> Please provide a {form} answer based on knowledge"},
+                {"role": "user", "content": query}
+            ]
         else:
-            form = ""
-        messages = [
-            {"role": "system", "content": f"<knowledge>  </knowledge> Please provide a {form} answer based on knowledge"},
-            {"role": "user", "content": query}
-        ]
+            raise ValueError("unsuported form")
+        
         prompt = self.LMtokenizer.apply_chat_template(
             messages,
             tokenize=False, 
@@ -121,6 +139,32 @@ class collate():
         )
         return prompt, answer
     
+    def templete_orimodel(self, query:str, answer:str ='')->tuple[str]:
+        Role = ["system", "user", "assistant"]
+        query, answer = query.strip(), answer.strip()
+        if self.form=="short":
+            form = "very short"
+            messages = [
+                {"role": "system", "content": f"<knowledge>  </knowledge> Please provide a {form} answer in no more than three words."},
+                {"role": "user", "content": query}
+            ]
+        elif self.form=="long":
+            form = "very long"
+            
+            messages = [
+                {"role": "system", "content": f"<knowledge>  </knowledge> Please provide a {form} answer based on knowledge"},
+                {"role": "user", "content": query}
+            ]
+        else:
+            raise ValueError("unsuported form")
+        
+        prompt = self.LMtokenizer.apply_chat_template(
+            messages,
+            tokenize=False, 
+            add_generation_prompt=True,
+            return_tensors="pt"
+        )
+        return prompt, answer
     def state_templete(self, q, a, action, d):
         sep = self.datatokenizer.sep_token
         return "".join(action)+ sep+ q+ sep+ a+sep+self.datatokenizer.decode(d)

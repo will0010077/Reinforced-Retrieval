@@ -1,5 +1,5 @@
 from typing import Any
-
+'''All config that you needed in training process'''
 
 class Config(dict):
     def __init__(self, **entries):
@@ -11,6 +11,8 @@ class Config(dict):
     def __setitem__(self, key: Any, value: Any) -> None:
         self.__dict__.update({key: value})
         return super().__setitem__(key, value)
+    def copy(self,):
+        return Config(self)
 
 train_config = Config(
     max_epoch=6,
@@ -19,7 +21,7 @@ train_config = Config(
     lm_lr=1.e-5,
     agent_lr=3.e-5,
     agent_head_lr = 5e-4,
-    betas=[0.9, 0.99],
+    betas=[0.9, 0.96],
     weight_decay=0.01,
     topk=1,
     load_E=True,
@@ -33,8 +35,8 @@ ppo_config = Config(
     grad_step=1
 )
 enc_config = Config(
-    enc_lr=3.e-5,
-    prefix_lr=1e-4,
+    enc_lr=5e-6,
+    prefix_lr=1.5e-5,
     num_layers=31,
     num_prefix=20
 )

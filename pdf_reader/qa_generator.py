@@ -38,9 +38,9 @@ def llama_parser(file_name,doc,article:list)->list:
 
 
 def prompter(Document:str,question_count:int)->str:
-    response_format="{Question : [Your Question here],Answer: [Your Answer here],Confidence: [Your Confidence here]}"
+    response_format="{Question : [Your Question here], Answer: [Your Answer here], Confidence: [Your Confidence here]}"
     confidence_define_prompt="Note: The confidence indicates how likely you think your Answer is true and correct,from 0.00 (worst) to 1.00 (best)"
-    return {'system_prompt':"You are a long form Question and Answer generator,Please Base on the given Document ask the Question and provide the answer to the question as much as possible, also provide the confidence Score to the answer in json","user_prompt":f"Please provide {question_count} pairs of very long Question and Answer as much as possible, also provide the confidence Score to the answer in json \nOnly give me the reply according to response format, don't give me any other words. \nDocument:{Document}\n\n response format:[{response_format}*{question_count}]","assistant_prompt":f'{confidence_define_prompt}'}
+    return {'system_prompt':"You are a long form Question and Answer generator, Please Base on the given Document ask the Question and provide the answer to the question as much as possible, also provide the confidence Score to the answer in json","user_prompt":f"Please provide {question_count} pairs of very long Question and Answer as much as possible, also provide the confidence Score to the answer in json \nOnly give me the reply according to response format, don't give me any other words. \nDocument:{Document}\n\n response format:[{response_format}*{question_count}]","assistant_prompt":f'{confidence_define_prompt}'}
 
 def chunk_document(batch_data):
     TOKEN_LIMIT = 256

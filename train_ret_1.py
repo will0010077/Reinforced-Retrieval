@@ -63,7 +63,8 @@ if __name__ == '__main__':
 
 
     elif sys.argv[1]=="Train_Retriever":
-
+        '''Follow LexMAE pretraining (https://openreview.net/forum?id=PfpEtB3-csK)
+        This is a pretraining stage for better unstanding on documents'''
         
         def collate(batch):
             train_x = torch.stack(batch)
