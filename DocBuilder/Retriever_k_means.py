@@ -341,6 +341,10 @@ class doc_retriever(torch.nn.Module):
     def forward(self, querys:list[str]):
         x=self.tokenizer(querys, return_tensors='pt', padding=True ,truncation=True).to(self.cluster.centers.device)
         return  F.normalize(self.model(x), dim=-1)
+    
+    @property
+    def device(self):
+        return self.model.device
         
 if __name__=='__main__':
     retriever=doc_retriever()

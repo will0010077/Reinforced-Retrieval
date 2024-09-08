@@ -1,43 +1,56 @@
 import sys
-sys.path.append("../../")
+sys.path.append("../")
 
 # Load model directly
 import torch
 
 from torch import nn, Tensor
-from transformers import AutoTokenizer, AutoModel, BertConfig, BertModel
-from config import enc_size_config
+import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModel, BertConfig, BertModel, RobertaConfig, RobertaModel
+import config
 
-config = enc_size_config
-bert_dir = "huggingface/bert"
+bert_dir = config.bert_dir
+enc_size_config = config.enc_size_config
 tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
 # token = tokenizer.convert_ids_to_tokens(torch.arange(1000)) #998-104
 class KnowEncoder(torch.nn.Module):
-    def __init__(self, num_layers, dims, groups, num_prefix, dtype=torch.bfloat16, **kwargs):
+    def __init__(self, num_layers, dims, num_prefix, dtype=torch.bfloat16, **kwargs):
         super().__init__()
-        if dims % groups !=0:
-            raise ValueError(f'Dims must divided by groups')
         
-        self.model = BertModel(BertConfig(**config))
-        self.tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(bert_dir)
+        self.model = RobertaModel(RobertaConfig(**enc_size_config))
+        bert = RobertaModel.from_pretrained(config.roberta_dir)
+        self.model.embeddings = bert.embeddings
+        for i in range(enc_size_config.num_hidden_layers):
+            self.model.encoder.layer[i] = bert.encoder.layer[i]
+        del bert
+        self.model.requires_grad_(False)
+        self.tokenizer:AutoTokenizer = AutoTokenizer.from_pretrained(config.roberta_dir)
         self.num_layers=num_layers
+        self.num_prefix = num_prefix
         self.dims=dims
         self.dtype=dtype
-        self.encoder_heads=nn.Sequential(
-            nn.Conv1d(config['hidden_size'], config['hidden_size']//2, kernel_size=1, groups=groups),
-            nn.LeakyReLU(inplace = True),
-            nn.Conv1d(config['hidden_size']//2, self.dims, kernel_size=1, groups=groups),
+        self.num_head = 16
+        # Linear layer to project the output of the attention layer to the desired dimension
+        self.proj_layer = nn.Linear(enc_size_config['hidden_size'], self.dims)
+        self.attention_pooling = nn.MultiheadAttention(self.dims, self.num_head, 0., batch_first=True)
+        # Adaption prompt as before
+        self.adaption_prompt = nn.Parameter(
+            torch.empty(self.num_layers, self.num_prefix, self.dims, device=self.model.device, dtype=torch.float32).normal_()
+        )#(layer, P, d)
+        self.enc_len = 32
+        self.pooling_drop = 0.
+        self.querys = nn.Parameter(
+            torch.empty(1,self.enc_len, self.dims, device=self.model.device, dtype=torch.float32).normal_()
         )
-        
-        assert num_prefix<999-104
-        self.num_prefix = num_prefix
-        self.register_buffer('prefix_tokens', torch.arange(104, 104+self.num_prefix*num_layers).unsqueeze_(0))#(1,P)
-        self.prefix_tokens:Tensor
-    def forward(self, x, k=1, device = None)->tuple[torch.Tensor]:
+
+    @torch.autocast("cuda", dtype=torch.bfloat16)
+    def forward(self, x, k=1, device = None, stage = 1)->tuple[torch.Tensor]:
         '''
         x: (B*k, n)
         output: (layer, B, k*P, dims)
         '''
+        if stage==0:
+            return  (None,)+ (None,)*(32-self.num_layers-1) + self.adaption_prompt.to(self.dtype).to(device, non_blocking=True).unsqueeze(1).unbind()
         if device is None:
             device = self.model.device
         if isinstance(x,list):
@@ -49,27 +62,31 @@ class KnowEncoder(torch.nn.Module):
 
 
         # cat special token for output fixed length of embedding, update attention mask length
-        input_ids = torch.cat([self.prefix_tokens.tile([B*k,1]), x.input_ids], dim = 1)
-        attention_mask = torch.cat([torch.ones([B*k, self.num_prefix*self.num_layers], device = x.input_ids.device), x.attention_mask], dim = 1)
+        input_ids = x.input_ids[:,:512]
+        attention_mask = x.attention_mask[:,:512]
 
 
         y=self.model(input_ids =input_ids, attention_mask = attention_mask)
         
         
-        y = y.last_hidden_state[:,:self.num_prefix*self.num_layers,:]#(B*k, P*layer, d)
-        y = y.transpose(1,2)#(B*k, d, P*layer)
-        y = self.encoder_heads.forward(y)#(B*k, dims, P*layer)
+        y = y.last_hidden_state#(B*k, N, d)
+        y = self.proj_layer.forward(y)#(B*k, N, dim)
+        attention_mask  = ~attention_mask[:,None,:].bool()# (B,N) -> (B, LQ, N)
+        attention_mask = attention_mask.repeat([self.num_head, self.querys.shape[-2],1])
+        # y = F.scaled_dot_product_attention(self.querys, y, y, attn_mask = attention_mask,  dropout_p=(self.pooling_drop if self.training else 0.0)) #(B, Qlen, dim)
+        y = self.attention_pooling.forward(self.querys.repeat([B*k,1,1]), y, y, attn_mask = attention_mask, need_weights=False)[0]
         # print('encoder_heads output:', y.shape)
         y = y.to(self.dtype)
-        y = y.reshape([B, k, self.dims, self.num_prefix, self.num_layers, ])#(B, k, dims, P, layer)
+        y = y.reshape([B, k, self.enc_len, self.dims, ])#(B, k, P, dim)
         # print('prefix output:', y.shape)
         
         
-        y = y.permute([4,0,1,3,2])#(layer, B, k, P, dims)
         # print('before cat output:', y.shape)
-        y = y.reshape([self.num_layers, B, k*self.num_prefix, self.dims])#(layer, B, k*P, dims)
+        y = y.reshape([B, k*self.enc_len, self.dims])#(B, k*P, dims)
         y = y.to(device, non_blocking=True)
-        return y.unbind()
+        # static prefix + Enc prefix
+        # return  (y,)+ (None,)*(32-1) 
+        return  (y,)+ (None,)*(32-self.num_layers-1) + self.adaption_prompt.to(self.dtype).to(device).unsqueeze(1).unbind()
     
     def mean_pooling(self,token_embeddings, mask):
         token_embeddings = token_embeddings.masked_fill(~mask[..., None].bool(), 0.)

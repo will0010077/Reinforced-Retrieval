@@ -9,61 +9,71 @@ from bert_score.utils import (bert_cos_score_idf, cache_scibert, get_bert_embedd
                     get_hash, get_idf_dict, get_model, get_tokenizer,
                     lang2model, model2layers, sent_encode)
 from collections import defaultdict
+import evaluate
 
+class metric(torch.nn.Module):
+    def __init__(self,):
+        super().__init__()
+        nltk.download('punkt')
 
-nltk.download('punkt')
+        model_type='bert-base-uncased'
+        self.tokenizer = get_tokenizer(model_type, True)
+        num_layers = model2layers[model_type]
+        self.model = get_model(model_type, num_layers, False)
+        self.rouge = evaluate.load('rouge')
+        self.bleu = evaluate.load("bleu")
 
+    def Bert_score(self, cands: List[str], refs: List[str]) -> tuple[torch.Tensor]:
+        """
+        Calculate the BERT score for each pair of sentences in cands and refs.
+        
+        :param cands: List of generated answers.
+        :param refs: List of reference answers.
+        :return: List of BERT scores for each pair of answers.
+        """
+        # P, R, F1 = score(a, b, lang="en", model_type='bert-base-uncased', device = None)
+        
+        
+        idf_dict = defaultdict(lambda: 1.0)
+        # set idf for [SEP] and [CLS] to 0
+        idf_dict[self.tokenizer.sep_token_id] = 0
+        idf_dict[self.tokenizer.cls_token_id] = 0
+        
+        all_preds = bert_cos_score_idf(
+            self.model,
+            refs,
+            cands,
+            self.tokenizer,
+            idf_dict,
+            device=self.model.device,
+        ).cpu()
+        P, R, F1  = all_preds[..., 0], all_preds[..., 1], all_preds[..., 2]  # P, R, F
+        score = F1
+        # if any(score==0.):
+        #     print("Warning: Zero BERTScore.")
+        return score.unbind()
 
-model_type='bert-base-uncased'
-tokenizer = get_tokenizer(model_type, True)
-num_layers = model2layers[model_type]
-model = get_model(model_type, num_layers, False)
-model.to("cuda")
-def Bert_score(refs: List[str], cands: List[str]) -> tuple[torch.Tensor]:
-    """
-    Calculate the BERT score for each pair of sentences in a and b.
-    
-    :param a: List of generated answers.
-    :param b: List of reference answers.
-    :return: List of BERT scores for each pair of answers.
-    """
-    # P, R, F1 = score(a, b, lang="en", model_type='bert-base-uncased', device = None)
-    
-    
-    idf_dict = defaultdict(lambda: 1.0)
-    # set idf for [SEP] and [CLS] to 0
-    idf_dict[tokenizer.sep_token_id] = 0
-    idf_dict[tokenizer.cls_token_id] = 0
-    
-    all_preds = bert_cos_score_idf(
-        model,
-        refs,
-        cands,
-        tokenizer,
-        idf_dict,
-        device="cuda",
-    ).cpu()
-    P, R, F1  = all_preds[..., 0], all_preds[..., 1], all_preds[..., 2]  # P, R, F
-    
-    return F1.unbind()
+    def BLEU_1_score(self, cands: List[str], refs: List[str]) -> List[float]:
+        """
+        Calculate the BLEU score for each pair of sentences in a and b.
+        
+        :param a: List of generated answers.
+        :param b: List of reference answers.
+        :return: List of BLEU scores for each pair of answers.
+        """
+        bleu_scores = []
+        for gen, ref in zip(cands, refs):
+            ref_tokens = nltk.word_tokenize(ref)
+            gen_tokens = nltk.word_tokenize(gen)
+            bleu = sentence_bleu([ref_tokens], gen_tokens, weights=[1.])
+            bleu_scores.append(bleu)
+        return bleu_scores
 
-def BLEU_score(a: List[str], b: List[str]) -> List[float]:
-    """
-    Calculate the BLEU score for each pair of sentences in a and b.
-    
-    :param a: List of generated answers.
-    :param b: List of reference answers.
-    :return: List of BLEU scores for each pair of answers.
-    """
-    bleu_scores = []
-    for gen, ref in zip(a, b):
-        ref_tokens = nltk.word_tokenize(ref)
-        gen_tokens = nltk.word_tokenize(gen)
-        bleu = sentence_bleu([ref_tokens], gen_tokens)
-        bleu_scores.append(bleu)
-    return bleu_scores
-
-
+    def ROUGE_score(self, pred, ref):
+        ''' return R-1, R-2, R-L'''
+        results = self.rouge.compute(predictions=pred, references=ref, use_aggregator=False, rouge_types=["rouge1","rouge2", 'rougeL'])
+        return results["rouge1"], results["rouge2"], results["rougeL"]
+        #{'rouge1': 1.0, 'rouge2': 1.0, 'rougeL': 1.0, 'rougeLsum': 1.0}
 
 
 class HalluScore:
@@ -93,17 +103,3 @@ class HalluScore:
         return hallucination_score.tolist()
 
 
-
-if __name__=='__main__':
-    a=['this is a dog','i love dongdong','i love ml!']
-    b=['this is a dog','i love study','i love dl!']
-
-
-    reward_bleu=BLEU_score(a,b)
-    
-    reward_bert=Bert_score(a,b)
-    
-    hallu_score=HalluScore()
-    reward_hallu_score = hallu_score.score(a, b)
-    print(f'output:{a}\ntarget:{b}')
-    print(f'bleu:{reward_bleu} \nbert:{reward_bert} \nhallu: {reward_hallu_score}')

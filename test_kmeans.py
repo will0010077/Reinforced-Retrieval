@@ -4,7 +4,7 @@ import torch
 from tqdm import tqdm
 import time
 import os
-
+'''This is a test code for database search speed'''
 cluster = cluster_builder(k=int(1*10**3))
 dim=768
 data=[]

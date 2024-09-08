@@ -11,8 +11,29 @@ import multiprocessing
 from queue import Queue
 import time,os,gc
 import re
+from datasets import load_dataset
+
 tokenizer = AutoTokenizer.from_pretrained("facebook/contriever")
 
+
+class LazySlice:
+    def __init__(self, parent, slice_obj):
+        self.parent = parent
+        self.slice_obj = slice_obj
+        self.indices = range(*slice_obj.indices(len(self.parent.dataset)))
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            return LazySlice(self.parent, slice(self.indices[idx].start, self.indices[idx].stop, self.indices[idx].step))
+        return self.parent[self.indices[idx]]
+
+    def __iter__(self):
+        for idx in self.indices:
+            yield self.parent[idx]
+
+    def __len__(self):
+        return len(self.indices)
+    
 def write_segment(f, s2c:Queue, qlock:Lock, flock:Lock, event:Event):
     buffer_size = 16
     while True:
@@ -42,7 +63,6 @@ def write_segment(f, s2c:Queue, qlock:Lock, flock:Lock, event:Event):
 
 def generate_segments(text, window_size, step)-> torch.Tensor:
 
-    text=re.sub("(<[/a-z0-9A-Z]*>)",'',string=text.strip())
     tokens = tokenizer(text, return_tensors='pt').input_ids[0]
     tokens: torch.Tensor
     segment_list=[]
@@ -151,12 +171,13 @@ def flush_buffer_to_file(f, buffer, output_lock):
 
 
 class NQADataset(Dataset):
-    def __init__(self, data_path='data/cleandata.jsonl',num_samples=None, use_long=True, use_doc = False):
+    def __init__(self, data_path='data/cleandata.jsonl',num_samples=None, use_long=True, use_short=False, use_doc = False):
         '''
         '''
         self.data_path = data_path
         self.num_samples = num_samples
         self.use_long = use_long
+        self.use_short = use_short
         self.use_doc = use_doc
         self.data = self.load_data()
     def load_data(self):
@@ -167,16 +188,18 @@ class NQADataset(Dataset):
                 if idx == self.num_samples:
                     break
                 line = json.loads(line)
-                # if not self.use_doc:
-                #     del line["document"]
+                if not self.use_doc:
+                    del line["document"]
                 if self.use_long and line["long_answer"]:
                     if len(line["long_answer"])>1000 or len(line["long_answer"])<3:
                         skip+=1
                         continue
                     data.append(line)
-                elif not self.use_long and line["short_answers"]:
+                elif self.use_short and line["short_answers"] and len(line["short_answers"][0])>0 :
                     data.append(line)
-        print("skip:",skip)
+                else:
+                    skip+=1
+        print(f"Loaded data total: {len(data)}, Skip: {skip}")
         return data
 
     def __len__(self):
@@ -184,49 +207,53 @@ class NQADataset(Dataset):
 
     def __getitem__(self, idx):
 
-        q=self.data[idx]['question']
+        out = [self.data[idx]['question']]
         if self.use_long:
-            a = self.data[idx]['long_answer']
-        else:
-            a = self.data[idx]['short_answers']
-        #dict_keys(['document_text', 'long_answer_candidates', 'question_text', 'annotations', 'document_url', 'example_id'])
+            out += [self.data[idx]['long_answer']]
+        if self.use_short:
+            out += [self.data[idx]['short_answers']]
+        if self.use_doc:
+            out += [self.data[idx]['document']]
 
-        # a=sample['annotations'][0]['long_answer']#sample['long_answer_candidates'][random_number]
+        return out#str(sample['question_text']),long_answer#text_without_tags
+class PretrainEnc(NQADataset):
+    def __getitem__(self, idx):
 
-        # long_answer=' '.join(sample['document_text'].split()[a['start_token']:a['end_token']])
+        out = [self.data[idx]['question']]
+        if self.use_long:
+            out += [self.data[idx]['long_answer']]
+        if self.use_short:
+            out += [self.data[idx]['short_answers']]
+        if self.use_doc:
+            out += [self.data[idx]['document']]
+            out += [self.data[idx]['score']]
 
-        return q, a#str(sample['question_text']),long_answer#text_without_tags
-
+        return out#str(sample['question_text']),long_answer#text_without_tags
+    
 def text_normal(text):
     if isinstance(text, list):
         return [*map(text_normal, text)]
     if isinstance(text, tuple):
         return tuple(map(text_normal, text))
 
-    assert isinstance(text, str)
+    if not isinstance(text, str):
+        return text
     text = text.strip()
     text=re.sub("(<[^<>]{1,20}>)", '', text)
     text = re.sub(" +", " ", text)
-    replace_word = {" \'s": "\'s",
+    replace_word = {
     "s \' ": "s\' ",
-    " \'m": "\'m",
-    " \'d": "\'d",
-    " \'ll": "\'ll",
-    " n\'t": "n\'t",
-    " \'re": "\'re",
-    " :": ":",
-    " ;": ";",
-    " ,": ",",
-    " .": ".",
-    "( ": "(",
-    " )": ")",
-    " - ": "-",
-    " -- ": "--",
     "`` ": "\"",
     " \'\'": "\"",
     }
     for k,v in replace_word.items():
         text = text.replace(k, v)
+    right = ["\'s", "\'m", "\'d", "\'ll", "\'re", "n\'t", ":", ";", ",", "\.", "\)","\%","\!","\?", "-", "--", "/"]
+    left = ["\(", "-", "--", "/"]
+    right = "( )("+"|".join(right)+")"
+    left = "("+"|".join(left)+")( )"
+    text = re.sub(right, r"\2",text)
+    text = re.sub(left, r"\1",text)
     text = re.sub("\.+", ".", text)
 
     #<Th_colspan="2">
@@ -385,24 +412,36 @@ class cleanDataset(Dataset):
     def __getitem__(self, idx):
 
         sample = self.data[idx]
+        if 'document_text' in sample:
+            document = str(sample['document_text'])
+            splited_doc=document.split(" ")
+        else:
+            splited_doc = [sample['document_tokens'][i]["token"] for i in range(len(sample['document_tokens']))]
+            document = " ".join(splited_doc)
         #dict_keys(['document_text', 'long_answer_candidates', 'question_text', 'annotations', 'document_url', 'example_id'])
+        # dict_keys(['annotations', 'document_html', 'document_title', 'document_tokens', 'document_url', 'example_id', 'long_answer_candidates', 'question_text', 'question_tokens'])
         # print(sample['question_text'])
         a=sample['annotations'][0]['long_answer']#sample['long_answer_candidates'][random_number]
-        splited_doc=sample['document_text'].split()
         long_answer=' '.join(splited_doc[a['start_token']:a['end_token']])
         short_annotations=sample['annotations'][0]['short_answers']
         if short_annotations==[]:
-            return None,None,None,None
-        if type(short_annotations)==dict:
-            short_annotations=[short_annotations]
+            answers = []
+        else:
+            if type(short_annotations)==dict:
+                short_annotations=[short_annotations]
 
-        answers=[]
-        for i in range(len(short_annotations)):
-            answer=' '.join(splited_doc[short_annotations[i]['start_token']:short_annotations[i]['end_token']])
-            answers.append(answer)
+            answers=[]
+            for i in range(len(short_annotations)):
+                answer=' '.join(splited_doc[short_annotations[i]['start_token']:short_annotations[i]['end_token']])
+                answers.append(answer)
         # print(answers)
         # print(len(sample['question_text']))
-        return text_normal([answers, long_answer, str(sample['document_text']), sample['question_text']])
+        # document = document.split("References (edit) Jump up ^")[0]
+        
+        document=re.sub("<H[23]> (References|Notes).*", '', document)
+        answers, long_answer, document, question_text =  text_normal([answers, long_answer, document, sample['question_text']])
+        return answers, long_answer, document, question_text
+    
 
 class DocumentDatasets():
     def __init__(self) -> None:
@@ -445,15 +484,34 @@ class DocumentDatasets():
         #return DocumentLeng
         return sum(self.file_len)
 
-def cleandata():
-    data_path='data/v1.0-simplified_simplified-nq-train.jsonl'
 
-    dataset=cleanDataset(data_path=data_path,num_samples=None)
+class trivia_qadatast:
+    def __init__(self, split = "train"):
+        self.dataset = load_dataset("mandarjoshi/trivia_qa", "rc.wikipedia")
+        if split=="train":
+            self.dataset = self.dataset["train"]
+        elif split =="test":
+            self.dataset = self.dataset["test"]
+        elif split =="valid":
+            self.dataset = self.dataset["validation"]
+    def __getitem__(self, ids):
+        
+        if isinstance(ids, slice):
+            return LazySlice(self, ids)
+        #     return lambda x: self.__getitem__(range(ids.start, ids.stop, ids.step)[x])
+        #['question', 'question_id', 'question_source', 'entity_pages', 'search_results', 'answer']
+        #question=q, short_answers=ans, long_answer=la, document = d
+        answer = [self.dataset[ids]["answer"]["value"] ]+ self.dataset[ids]["answer"]["aliases"]
+        return text_normal([answer, None, "\n".join(self.dataset[ids]["entity_pages"]["wiki_context"]), self.dataset[ids]['question']])
+    def __len__(self,):
+        return len(self.dataset)
 
-    datasample=[]
+def cleandata(dataset, outpath):
+
+    num_data=0
     total_a_lenth=[]
-    file = open("data/cleandata.jsonl", 'w')
-    for i in tqdm(range(len(dataset))):
+    file = open(outpath, 'w')
+    for i in tqdm(range(len(dataset)), ncols=0):
         ans, la, d, q=dataset[i]
         if ans:
             for a in ans:
@@ -462,17 +520,45 @@ def cleandata():
                     continue
                 total_a_lenth.append(len(a.split()))
         if ans or la:
-            if len(la)>1000:
+            if la and len(la)>3000:
                 continue
-            json.dump(dict(short_answers=ans,long_answer=la,question=q), file) #document=d,
+            json.dump(dict(question=q, short_answers=ans, long_answer=la, document = d), file)
             file.write('\n')
+            num_data+=1
     file.close()
 
     print(sum(total_a_lenth)/len(total_a_lenth))
     print(max(total_a_lenth))
-    print('total:',len(datasample))#98708
+    print('total:',num_data)#98708
 
+def cleandata_trivia(outpath):
+    dataset=trivia_qadatast()
+
+    num_data=0
+    total_a_lenth=[]
+    file = open(outpath, 'w')
+    for i in tqdm(range(len(dataset)), ncols=0):
+        ans, la, d, q=dataset[i]
+        if ans:
+            for a in ans:
+                if len(a.split())>10:
+                    ans.remove(a)
+                    continue
+                total_a_lenth.append(len(a.split()))
+        if ans or la:
+            if len(la)>3000:
+                continue
+            json.dump(dict(question=q, short_answers=ans, long_answer=la, document = d), file)
+            file.write('\n')
+            num_data+=1
+    file.close()
+
+    print(sum(total_a_lenth)/len(total_a_lenth))
+    print(max(total_a_lenth))
+    print('total:',num_data)#98708
 
 
 if __name__=="__main__":
-    cleandata()
+    d = trivia_qadatast()[10:]
+    for i  in range(3):
+        print(d[i][0][0])

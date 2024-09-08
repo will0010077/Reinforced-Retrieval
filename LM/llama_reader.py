@@ -1,3 +1,5 @@
+import sys
+
 from typing import Dict, List
 from transformers import TextStreamer,AutoTokenizer,AutoModelForCausalLM, LlamaConfig, LlamaForCausalLM, GenerationConfig
 
@@ -15,7 +17,7 @@ from peft.utils import _freeze_adapter, _get_submodules
 from LM.Knowledge_encoder import KnowEncoder
 from peft.tuners.adaption_prompt.config import AdaptionPromptConfig, TRANSFORMERS_MODEL_CONFIG, prepare_config
 import math
-from config import generate_config
+from config import generate_config, token
 
 sep='</s>'
 eos='</s>'
@@ -40,7 +42,7 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
         if kwargs.get("output_attention", False):
             raise NotImplementedError("output_attention is not currently supported.")
         output, _, past_key_value = self.model(**kwargs)
-        if not hasattr(self, "adaption_prompt"):
+        if self.__dict__.get("adaption_prompt", None) is None:
             return output, None, past_key_value
         bsz = output.shape[0]
         q_len = output.shape[1]
@@ -104,7 +106,7 @@ class EncoderAdaptedAttention(peft.tuners.adaption_prompt.AdaptedAttention):
         return output, None, past_key_value
 
 class LLaMa_reader(torch.nn.Module):
-    def __init__(self, model_dir, device, token, from_pretrained=True, generate_config = generate_config):
+    def __init__(self, model_dir, device, token = token, from_pretrained=True, generate_config = generate_config):
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, lstrip=False, token=token)
         self.tokenizer.model_max_length=2048
@@ -156,20 +158,36 @@ class LLaMa_reader(torch.nn.Module):
         loss=None
 
         labels = tokens.get('labels', None)
+        
+        loss = None
         if labels is not None:
-            del tokens['labels']
             # Shift so that tokens < n predict n
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            # Enable model parallelism
+            shift_labels = shift_labels.to(shift_logits.device)
+            # Flatten the tokens
+            loss_fct = torch.nn.CrossEntropyLoss()
+            
+            shift_logits = shift_logits.view(-1, self.config.vocab_size) #remove first dimension
+            shift_labels = shift_labels.view(-1) #remove first dimension
+            loss = loss_fct(shift_logits, shift_labels)
+            
+            #loss = torch.vmap(loss_fct)(shift_logits, shift_labels) # this keep the first dimension, you can use it as a negtive reward
+        # if labels is not None:
+        #     del tokens['labels']
+        #     # Shift so that tokens < n predict n
 
-            logp = torch.log_softmax(lm_logits, dim=-1)
-            shift_logp = logp[..., :-1, :]
-            labels[tokens['attention_mask']==0]=-100
-            shift_labels = labels[..., 1:]
+        #     logp = torch.log_softmax(lm_logits, dim=-1)
+        #     shift_logp = logp[..., :-1, :]
+        #     labels[tokens['attention_mask']==0]=-100
+        #     shift_labels = labels[..., 1:]
             
-            loss = -shift_logp[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
-            mask = shift_labels==-100
-            loss = loss.masked_fill_(mask, 0)
+        #     loss = -shift_logp[torch.arange(shift_labels.shape[0])[:,None], torch.arange(shift_labels.shape[1])[None,:], shift_labels] #(B,N)
+        #     mask = shift_labels==-100
+        #     loss = loss.masked_fill_(mask, 0)
             
-            loss = loss.sum(-1)/(~mask).sum(-1)
+        #     loss = loss.sum(-1)/(~mask).sum(-1)
 
         
         return lm_logits, loss
@@ -187,18 +205,19 @@ class LLaMa_reader(torch.nn.Module):
         tokens = self.tokenizer(message, padding=True ,truncation=True,return_tensors='pt')
         tokens = tokens.to(self.model.device)
         
-        self.model.generation_config.stop_strings.extend(stop_strings)
+        # self.model.generation_config.stop_strings.extend(stop_strings)
         outputs = self.model.generate(**tokens,
+                                      **self.generate_config,
                                         streamer=streamer,
                                         max_new_tokens=max_new_tokens,
-                                        past_key_values = cache,
-                                        **self.generate_config)
+                                        # tokenizer = self.tokenizer,
+                                        )
         
-        [self.model.generation_config.stop_strings.pop(-1) for _ in range(len(stop_strings))]
+        # [self.model.generation_config.stop_strings.pop(-1) for _ in range(len(stop_strings))]
 
         outputs = [outputs[j][len(tokens.input_ids[0]):].cpu() for j in range(len(tokens.input_ids))]
         if decode:
-            outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=False)
+            outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
         # self.chat_history.append([message, output])[:,tokens.input_ids.shape[1]:]
         return outputs
     
@@ -209,7 +228,7 @@ class LLaMa_reader(torch.nn.Module):
             messages = [messages]
         if isinstance(forcing, str):
             forcing = [forcing]
-        cat = [m+" "+f+self.eos for m, f in zip(messages, forcing)]
+        cat = [m+" "+f for m, f in zip(messages, forcing)]
         unlabel = self.tokenizer(text=messages).input_ids
         unlabel_len = [len(m) for m in unlabel]
         # print(max([len(s) for s in unlabel]))
@@ -220,15 +239,17 @@ class LLaMa_reader(torch.nn.Module):
         dist = Categorical(logits=lm_logits/temperture)
         
         top_token = dist.sample()
-        cut_token = [top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1] for i in range(len(messages))]
+        cut_out_token = [top_token[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1] for i in range(len(messages))]
         if decode:
-            output = self.tokenizer.batch_decode(cut_token, skip_special_tokens=False)
+            output = self.tokenizer.batch_decode(cut_out_token, skip_special_tokens=False)
         else:
-            output = cut_token
+            output = cut_out_token
         if return_prob:
-            log_prob = dist.log_prob(top_token)
-            token_prob = [log_prob[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1].cpu() for i in range(len(messages))]
-            return output, token_prob
+            log_prob_resampled = dist.log_prob(top_token)
+            log_prob_input = dist.log_prob(tokens.input_ids.roll(-1))#B,n
+            token_prob_resampled = [log_prob_resampled[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1].cpu() for i in range(len(messages))]
+            token_prob_input = [log_prob_input[i][tokens.attention_mask[i].bool()][unlabel_len[i]-1:-1].cpu() for i in range(len(messages))]
+            return output, token_prob_input, token_prob_resampled
         return output
         
 
@@ -255,10 +276,10 @@ class EncTunedLM(peft.AdaptionPromptModel, nn.Module):
         self._mark_only_adaption_prompts_as_trainable(self.model)
         self.module_name = prepare_config(peft.AdaptionPromptConfig, self.model).target_modules
 
-    def forward(self, *args, Doc_tokens = None, k = 1, use_ref = False, **kwargs):
+    def forward(self, *args, Doc_tokens = None, k = 1, use_ref = False, stage=1, **kwargs):
 
         if Doc_tokens is not None:
-            prefix = self.Enc.forward(Doc_tokens)
+            prefix = self.Enc.forward(Doc_tokens, stage = stage)
         else:
             prefix = None
         self._set_prefix(prefix)
