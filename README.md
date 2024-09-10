@@ -10,15 +10,15 @@ pre-download model weight
 All the config is in config.py
 
 ## data preprocess
-you should run "dataclean" first\\
+you should run "dataclean" first\ 
 ```python data_preprocess.py```
 
 ## train retriever
-```python train_ret_1.py```\\
+```python train_ret_1.py```\ 
 ```python train_ret_2.py```
 
 ## data preprocess
-then run "process Q-A-Doc"\\
+then run "process Q-A-Doc"\ 
 ```python data_preprocess.py```
 
 ## pre-train encoder
