@@ -2,8 +2,11 @@
 
 ## enviroment prepare
 install requirements
+
 ```pip install -r requirements.txt```
+
 pre-download model weight
+
 ```python save_pretrained.py```
 
 ### config
