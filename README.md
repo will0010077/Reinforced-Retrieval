@@ -1,4 +1,4 @@
-# Prefix-Tuning-with-RL-Retriever
+# Reinforced-Retrieval
 
 ## enviroment prepare
 install requirements
