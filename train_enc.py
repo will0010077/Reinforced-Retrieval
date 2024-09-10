@@ -54,7 +54,7 @@ def training(rank, world_size, start_epoch, max_epoch, model, dataset, collate_f
 
     Enc_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_" not in n]
     Prefix_param_list =[p for n, p in model.named_parameters() if p.requires_grad and "adaption_" in n]
-    optim = torch.optim.AdamW([{"params":Enc_param_list, "lr":enc_config.enc_lr}, {"params":Prefix_param_list, "lr":enc_config.prefix_lr}], betas = train_config.betas, weight_decay = 0.05) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
+    optim = torch.optim.AdamW([{"params":Enc_param_list, "lr":enc_config.enc_lr}, {"params":Prefix_param_list, "lr":enc_config.prefix_lr}], betas = train_config.betas, weight_decay = 0.02) #note: Adam work with float16 need to set eps=1e-4 to avoid 0 devided by 0
     # optim.load_state_dict(torch.load("save/EncLM_optim.pt", map_location="cpu"))
     iter_step = len(loader)*max_epoch
     warm = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1e-5, total_iters=int(iter_step*0.05))
@@ -86,6 +86,7 @@ def training(rank, world_size, start_epoch, max_epoch, model, dataset, collate_f
             # loss += kl.mean() * 0.1
             if i%max(int(32/(world_size*bs)),1)==0:
                 # Unscale the gradients and perform optimizer step
+                torch.nn.utils.clip_grad_norm_(Enc_param_list+Prefix_param_list, 1.)
                 optim.step()
 
                 # Update the scaler
@@ -99,7 +100,7 @@ def training(rank, world_size, start_epoch, max_epoch, model, dataset, collate_f
         stream.synchronize()
         dist.barrier()
         if rank==0:
-            torch.save(model.module.state_dict(), f"save/NQ_EncLM_{epoch}.pt")
+            torch.save({k:v for k,v in model.module.named_parameters() if v.requires_grad}, f"save/NQ_EncLM_{0}.pt")
             torch.save(optim.state_dict(), "save/EncLM_optim.pt")
         dist.barrier()
         
@@ -128,10 +129,7 @@ def main():
     if True:
         # torch.save(LM.state_dict(), "/usr/model/EncLM.pt")
         print(f'Loading EncTunedLM weight...')
-        try:
-            LM.load_state_dict(torch.load("save/TV_EncLM_0.pt", map_location='cpu'), strict=True)
-        except:
-            print("Loading may not finish.")
+        LM.load_state_dict(torch.load("save/TV_EncLM_0.pt", map_location='cpu'), strict=False)
         
     start_epoch = 0
     max_epoch = 3 # update epoch, not end epoch

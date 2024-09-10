@@ -93,6 +93,15 @@ class collate():
         d_tokens = self.datatokenizer(docs, return_tensors='pt', padding=True, max_length=256, truncation =True,)
         return tensor_retuen_type(**qa_tokens), tensor_retuen_type(**d_tokens)
     
+    def collate_qa_docs_embedding(self, batch:list):
+        q_str, a_str, docs, score = [*zip(*batch)]
+        q_str, a_str, docs, score = [*map(list, [q_str, a_str, docs, score])]
+        unlabel, unlabel_str, qa_tokens = self.prepare_QA_token(q_str, a_str)
+        
+        docs = [d[Categorical(logits=torch.tensor(s)/2).sample()] for d, s in zip(docs, score)]
+        d_tokens = self.LMtokenizer(docs, return_tensors='pt', padding=True, max_length=256, truncation =True,)
+        return tensor_retuen_type(**qa_tokens), tensor_retuen_type(**d_tokens)
+    
     def collate_q(self, batch:list):
         batch = [self.templete(q, a) for q, a in batch]
         q_str, a_str = [*zip(*batch)]
@@ -116,16 +125,17 @@ class collate():
         # ]
         
         if self.form=="short":
-            form = "very short"
+            form = " very short"
             messages = [
-                {"role": "system", "content": f"<knowledge>  </knowledge> Please provide a {form} answer in no more than three words."},
+                {"role": "system", "content": f"<knowledge>  </knowledge> Please provide a{form} answer in no more than three words."},
                 {"role": "user", "content": query}
             ]
         elif self.form=="long":
-            form = "very long"
+            form = " very long"
+            form = ""
             
             messages = [
-                {"role": "system", "content": f"<knowledge>  </knowledge> Please provide a {form} answer based on knowledge"},
+                {"role": "system", "content": f"<knowledge>  </knowledge> Please provide a{form} answer based on knowledge"},
                 {"role": "user", "content": query}
             ]
         else:
