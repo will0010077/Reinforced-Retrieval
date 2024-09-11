@@ -9,7 +9,7 @@ pre-download model weight
 
 ```python save_pretrained.py```
 
-Before start, you need to manual download Natural Quastion dataset
+Before start, you need to manual download Natural Quastion dataset and put them into ```./data```
 ```v1.0-simplified_simplified-nq-train.jsonl``` and ```v1.0-simplified_nq-dev-all.jsonl'```
 
 from [https://ai.google.com/research/NaturalQuestions/download](https://ai.google.com/research/NaturalQuestions/download)
