@@ -1,5 +1,5 @@
 # Reinforced-Retrieval
-![image](https://hackmd.io/_uploads/S1Ho3YOFA.png)
+![image](Reinforced-Retrieval-refine_agent.png)
 
 ## enviroment prepare
 install requirements
