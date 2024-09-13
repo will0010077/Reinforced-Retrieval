@@ -1,5 +1,5 @@
 # Reinforced-Retrieval
-![image](Reinforced-Retrieval-refine_agent.png)
+![image](Reinforced-Retrieval-refine_agent.png =60%x)
 
 ## enviroment prepare
 install requirements
