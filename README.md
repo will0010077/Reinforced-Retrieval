@@ -1,6 +1,7 @@
 # Reinforced-Retrieval
 <img src="Reinforced-Retrieval-refine_agent.png" width=60% height=60%>
-[Paper](ReinforcedRetrieval.pdf)
+[ReinforcedRetrieval.pdf](https://github.com/will0010077/Reinforced-Retrieval/blob/main/ReinforcedRetrieval.pdf)
+
 ## enviroment prepare
 install requirements
 
